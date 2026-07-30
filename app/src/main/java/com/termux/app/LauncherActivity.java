@@ -12,7 +12,6 @@ import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -31,8 +30,6 @@ import android.widget.TextView;
 
 import com.termux.shared.logger.Logger;
 import com.termux.shared.termux.TermuxConstants;
-import com.termux.shared.termux.shell.command.environment.TermuxShellEnvironment;
-import com.termux.shared.termux.shell.command.runner.terminal.TermuxSession;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,10 +44,8 @@ import java.util.Set;
  *
  * On startup, binds to {@link TermuxService} and creates a background bash session
  * with ~/.bashrc initialization. The main UI shows an app grid (5 columns) with
- * d-pad navigation, long-press bottom bar (Hide/Uninst/Move/Show/Boot/Delay),
- * and a "Terminal" tile that opens {@link TermuxActivity}.
- *
- * Pattern: pure-code UI (no XML layouts), adapted from TVHome.
+ * d-pad navigation, long-press bottom bar (Hide/Move/Show/Boot/Delay),
+ * and a movable "Terminal" tile that opens {@link TermuxActivity}.
  */
 public class LauncherActivity extends Activity implements ServiceConnection {
 
@@ -61,6 +56,9 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private static final String KEY_ORDER = "app_order";
     private static final String KEY_AUTOBOOT = "autoboot_pkg";
     private static final String KEY_BOOT_DELAY = "boot_delay";
+
+    // Special marker in order string for Terminal tile
+    private static final String TERMINAL_MARKER = "##TERMINAL##";
 
     private static final long BOOT_WINDOW = 120_000;
     private static final long LONG_PRESS = 500;
@@ -87,7 +85,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private static final int TEXT_COLOR     = 0xFFCCCCCC;
     private static final int TEXT_SIZE      = 12;
 
-    // Termux integration
     private TermuxService mTermuxService;
     private boolean mServiceBound;
 
@@ -103,7 +100,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private int delayIdx = 0;
 
     private boolean editMode, needReload = true;
-    private int editPos, iconSize, gridPad, tilePad;
+    private int editPos;
     private long dpadDownTime;
 
     @Override
@@ -116,20 +113,14 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         hiddenPkgs = prefs.getStringSet(KEY_HIDDEN, new HashSet<>());
         autobootPkg = prefs.getString(KEY_AUTOBOOT, "");
         delayIdx = prefs.getInt(KEY_BOOT_DELAY, 0);
-        iconSize = dp(100); gridPad = dp(32); tilePad = dp(8);
 
         buildUI();
         loadApps();
 
-        // Bind to TermuxService for background shell
         Intent serviceIntent = new Intent(this, TermuxService.class);
         startService(serviceIntent);
         bindService(serviceIntent, this, Context.BIND_AUTO_CREATE);
 
-        // Start embedded SSH daemon on port 2223
-        SshdManager.start(this);
-
-        // Boot: delayed auto-launch
         if (SystemClock.elapsedRealtime() < BOOT_WINDOW && !autobootPkg.isEmpty() && delayIdx > 0) {
             final String pkg = autobootPkg;
             final long delay = DELAY_MS[delayIdx];
@@ -165,7 +156,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         }
     }
 
-    // ==================== TermuxService integration ====================
+    // ==================== TermuxService ====================
 
     @Override
     public void onServiceConnected(ComponentName name, IBinder service) {
@@ -173,7 +164,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         mServiceBound = true;
         mTermuxService = ((TermuxService.LocalBinder) service).service;
 
-        // Install bootstrap if needed, then create background shell
         if (mTermuxService.isTermuxSessionsEmpty()) {
             TermuxInstaller.setupBootstrapIfNeeded(LauncherActivity.this, () -> {
                 if (mTermuxService == null) return;
@@ -193,11 +183,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         mTermuxService = null;
     }
 
-    /**
-     * Creates a background TermuxSession running bash with ~/.bashrc.
-     * The PTY session runs without TerminalView attached.
-     * When TermuxActivity opens, it attaches to this existing session.
-     */
     private void createBackgroundShell() {
         Logger.logDebug(LOG_TAG, "Creating background shell session");
         mTermuxService.createTermuxSession(null, null, null,
@@ -213,7 +198,14 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
     // ==================== UI ====================
 
+    private int dp(int px) {
+        return (int) (px * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
     private void buildUI() {
+        int iconSize = dp(100);
+        int tilePad = dp(8);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG_COLOR);
@@ -230,7 +222,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         mainGrid.setFocusableInTouchMode(true);
         mainGrid.setSmoothScrollbarEnabled(false);
 
-        GridView g = mainGrid;
         GradientDrawable selN = new GradientDrawable(); selN.setShape(GradientDrawable.RECTANGLE);
         selN.setColor(Color.TRANSPARENT);
         GradientDrawable selF = new GradientDrawable(); selF.setShape(GradientDrawable.RECTANGLE);
@@ -266,8 +257,11 @@ public class LauncherActivity extends Activity implements ServiceConnection {
                             toggleBottomBar();
                         } else {
                             int p = mainGrid.getSelectedItemPosition();
-                            if (p == 0) openTermuxActivity();
-                            else if (p >= 1 && p - 1 < shownApps.size()) launchPkg(shownApps.get(p - 1).pkg);
+                            if (p >= 0 && p < shownApps.size()) {
+                                AppInfo sel = shownApps.get(p);
+                                if (sel.isTerminal) openTermuxActivity();
+                                else launchPkg(sel.pkg);
+                            }
                         }
                         return true;
                     }
@@ -283,7 +277,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             }
         });
 
-        // Bottom bar
         bottomBar = new LinearLayout(this);
         bottomBar.setOrientation(LinearLayout.HORIZONTAL);
         bottomBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -301,7 +294,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         bottomBar.addView(bottomLabel);
 
         addBtn("Hide", new Runnable() { public void run() { hideSelected(); } });
-        addBtn("Uninst", new Runnable() { public void run() { uninstallSelected(); } });
         addBtn("Move", new Runnable() { public void run() { enterEditMode(); } });
         addBtn("Show", new Runnable() { public void run() { restoreAll(); } });
         addBtn("Boot", new Runnable() { public void run() { setAutoboot(); } });
@@ -341,7 +333,9 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     // ==================== Edit mode ====================
 
     private void enterEditMode() {
-        editMode = true; editPos = mainGrid.getSelectedItemPosition(); closeBar();
+        editMode = true; editPos = mainGrid.getSelectedItemPosition();
+        if (editPos < 0 || editPos >= shownApps.size()) { editMode = false; return; }
+        closeBar();
         mainAdapter.notifyDataSetChanged();
         View sel = mainGrid.getSelectedView();
         if (sel != null) {
@@ -360,11 +354,11 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     }
 
     private void moveApp(int delta) {
-        int newPos = editPos - 1 + delta; // offset by Terminal tile
+        int newPos = editPos + delta;
         if (newPos < 0 || newPos >= shownApps.size()) return;
-        AppInfo moving = shownApps.remove(editPos - 1);
+        AppInfo moving = shownApps.remove(editPos);
         shownApps.add(newPos, moving);
-        editPos = newPos + 1;
+        editPos = newPos;
         mainAdapter.notifyDataSetChanged();
         mainGrid.setSelection(editPos);
         View sel = mainGrid.getSelectedView();
@@ -379,13 +373,19 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
     // ==================== Bottom bar actions ====================
 
+    private AppInfo selectedApp() {
+        int pos = mainGrid.getSelectedItemPosition();
+        return (pos >= 0 && pos < shownApps.size()) ? shownApps.get(pos) : null;
+    }
+
     private void toggleBottomBar() {
         if (editMode) return;
-        int pos = mainGrid.getSelectedItemPosition();
-        if (pos <= 0) return; // Terminal tile or nothing selected
+        AppInfo sel = selectedApp();
+        if (sel == null) return;
         if (bottomBar.getVisibility() == View.GONE) {
-            AppInfo sel = shownApps.get(pos - 1);
-            if (sel != null) { bottomIcon.setImageDrawable(sel.icon); bottomLabel.setText(sel.label); }
+            bottomIcon.setImageDrawable(sel.icon != null ? sel.icon :
+                getResources().getDrawable(android.R.drawable.ic_menu_manage));
+            bottomLabel.setText(sel.label);
             ((TextView) bottomBar.getChildAt(bottomBar.getChildCount() - 1)).setText(DELAY_LB[delayIdx]);
             bottomBar.setVisibility(View.VISIBLE);
             bottomBar.getChildAt(2).requestFocus();
@@ -395,20 +395,8 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     }
 
     private void hideSelected() {
-        int pos = mainGrid.getSelectedItemPosition();
-        if (pos <= 0) return;
-        AppInfo s = shownApps.get(pos - 1);
-        if (s != null) { hiddenPkgs.add(s.pkg); saveHidden(); loadApps(); closeBar(); }
-    }
-
-    private void uninstallSelected() {
-        int pos = mainGrid.getSelectedItemPosition();
-        if (pos <= 0) return;
-        AppInfo s = shownApps.get(pos - 1);
-        if (s != null) {
-            startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + s.pkg)));
-            closeBar();
-        }
+        AppInfo s = selectedApp();
+        if (s != null && !s.isTerminal) { hiddenPkgs.add(s.pkg); saveHidden(); loadApps(); closeBar(); }
     }
 
     private void restoreAll() {
@@ -416,10 +404,8 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     }
 
     private void setAutoboot() {
-        int pos = mainGrid.getSelectedItemPosition();
-        if (pos <= 0) return;
-        AppInfo s = shownApps.get(pos - 1);
-        if (s == null) return;
+        AppInfo s = selectedApp();
+        if (s == null || s.isTerminal) return;
         autobootPkg = autobootPkg.equals(s.pkg) ? "" : s.pkg;
         getSharedPreferences(PREFS, 0).edit().putString(KEY_AUTOBOOT, autobootPkg).apply();
         mainAdapter.notifyDataSetChanged();
@@ -443,6 +429,15 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
     // ==================== App loading ====================
 
+    private AppInfo makeTerminalInfo() {
+        AppInfo info = new AppInfo();
+        info.pkg = ""; info.label = "Terminal";
+        info.icon = getResources().getDrawable(android.R.drawable.ic_menu_manage);
+        info.intent = null;
+        info.isTerminal = true;
+        return info;
+    }
+
     private void loadApps() {
         needReload = false;
         allApps = new ArrayList<>();
@@ -465,72 +460,96 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         if (!orderRaw.isEmpty()) {
             final LinkedHashMap<String, Integer> o = new LinkedHashMap<>();
             for (String p : orderRaw.split(",")) if (!p.isEmpty()) o.put(p, o.size());
-            Collections.sort(allApps, new Comparator<AppInfo>() {
+            // Create shownApps in saved order
+            List<AppInfo> ordered = new ArrayList<>();
+            List<AppInfo> unordered = new ArrayList<>();
+            for (AppInfo a : allApps) {
+                if (a.pkg.isEmpty()) continue;
+                if (!hiddenPkgs.contains(a.pkg)) {
+                    if (o.containsKey(a.pkg)) ordered.add(a);
+                    else unordered.add(a);
+                }
+            }
+            Collections.sort(unordered, new Comparator<AppInfo>() {
+                public int compare(AppInfo a, AppInfo b) { return a.label.compareToIgnoreCase(b.label); }
+            });
+            // Sort ordered by their saved position
+            Collections.sort(ordered, new Comparator<AppInfo>() {
                 public int compare(AppInfo a, AppInfo b) {
-                    int oa = o.containsKey(a.pkg) ? o.get(a.pkg) : Integer.MAX_VALUE;
-                    int ob = o.containsKey(b.pkg) ? o.get(b.pkg) : Integer.MAX_VALUE;
-                    return oa != ob ? oa - ob : a.label.compareToIgnoreCase(b.label);
+                    int oa = o.getOrDefault(a.pkg, Integer.MAX_VALUE);
+                    int ob = o.getOrDefault(b.pkg, Integer.MAX_VALUE);
+                    return oa - ob;
                 }
             });
+            shownApps = new ArrayList<>(ordered);
+            shownApps.addAll(unordered);
+
+            // Insert Terminal at saved position if any
+            int termPos = o.containsKey(TERMINAL_MARKER) ? o.get(TERMINAL_MARKER) : shownApps.size();
+            if (termPos < 0) termPos = 0;
+            if (termPos > shownApps.size()) termPos = shownApps.size();
+            shownApps.add(termPos, makeTerminalInfo());
         } else {
+            // First run: alphabet sort apps, Terminal at the end
             Collections.sort(allApps, new Comparator<AppInfo>() {
-                public int compare(AppInfo a, AppInfo b) {
-                    return a.label.compareToIgnoreCase(b.label);
-                }
+                public int compare(AppInfo a, AppInfo b) { return a.label.compareToIgnoreCase(b.label); }
             });
+            shownApps = new ArrayList<>();
+            for (AppInfo a : allApps) if (!hiddenPkgs.contains(a.pkg)) shownApps.add(a);
+            shownApps.add(makeTerminalInfo());
         }
 
-        shownApps = new ArrayList<>();
-        for (AppInfo a : allApps) if (!hiddenPkgs.contains(a.pkg)) shownApps.add(a);
         mainAdapter.notifyDataSetChanged();
     }
 
     private void saveOrder(boolean flagReload) {
         StringBuilder sb = new StringBuilder();
-        for (AppInfo a : shownApps) { if (sb.length() > 0) sb.append(","); sb.append(a.pkg); }
+        for (AppInfo a : shownApps) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(a.isTerminal ? TERMINAL_MARKER : a.pkg);
+        }
         getSharedPreferences(PREFS, 0).edit().putString(KEY_ORDER, sb.toString()).apply();
         if (flagReload) needReload = true;
     }
 
     // ==================== Adapter ====================
 
-    static class AppInfo { String pkg, label; Drawable icon; Intent intent; }
+    static class AppInfo {
+        String pkg, label;
+        Drawable icon;
+        Intent intent;
+        boolean isTerminal;
+    }
 
     class AppAdapter extends BaseAdapter {
-        @Override public int getCount() { return (shownApps != null ? shownApps.size() : 0) + 1; }
-        @Override public Object getItem(int pos) { return pos == 0 ? null : shownApps.get(pos - 1); }
+        @Override public int getCount() { return shownApps != null ? shownApps.size() : 0; }
+        @Override public Object getItem(int pos) { return shownApps.get(pos); }
         @Override public long getItemId(int pos) { return pos; }
 
         @Override
         public View getView(int pos, View convert, ViewGroup parent) {
-            if (convert == null) convert = newTile();
-
-            if (pos == 0) {
-                // Terminal tile
-                ImageView icon = (ImageView) convert.findViewWithTag("I");
-                TextView label = (TextView) convert.findViewWithTag("L");
-                icon.setImageResource(android.R.drawable.ic_menu_manage);
-                label.setText("Terminal");
-                label.setTextColor(TEXT_COLOR);
-                ((GradientDrawable) convert.getBackground()).setColor(TILE_TERMUX);
-                return convert;
-            }
-
-            AppInfo app = shownApps.get(pos - 1);
+            int iconSize = dp(100);
+            if (convert == null) convert = newTile(iconSize);
+            AppInfo app = shownApps.get(pos);
             ImageView icon = (ImageView) convert.findViewWithTag("I");
             TextView label = (TextView) convert.findViewWithTag("L");
             icon.setImageDrawable(app.icon);
-            boolean isBoot = app.pkg.equals(autobootPkg);
+            boolean isBoot = !app.isTerminal && app.pkg.equals(autobootPkg);
             label.setText(isBoot ? "> " + app.label : app.label);
             label.setTextColor(isBoot ? 0xFF80D8FF : TEXT_COLOR);
-            if (editMode && pos == editPos) label.setTextColor(0xFFFFCC80);
-            ((GradientDrawable) convert.getBackground()).setColor(
-                editMode && pos == editPos ? TILE_EDIT : TILE_COLOR);
+            if (app.isTerminal) {
+                ((GradientDrawable) convert.getBackground()).setColor(TILE_TERMUX);
+            } else if (editMode && pos == editPos) {
+                label.setTextColor(0xFFFFCC80);
+                ((GradientDrawable) convert.getBackground()).setColor(TILE_EDIT);
+            } else {
+                ((GradientDrawable) convert.getBackground()).setColor(TILE_COLOR);
+            }
             return convert;
         }
     }
 
-    private View newTile() {
+    private View newTile(int iconSize) {
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.RECTANGLE); bg.setCornerRadius(dp(10)); bg.setColor(TILE_COLOR);
         LinearLayout tile = new LinearLayout(this);
@@ -549,9 +568,5 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         label.setTag("L"); label.setFocusable(false); label.setPadding(0, dp(6), 0, 0);
         tile.addView(label);
         return tile;
-    }
-
-    private int dp(int px) {
-        return (int) (px * getResources().getDisplayMetrics().density + 0.5f);
     }
 }
