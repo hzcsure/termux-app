@@ -122,6 +122,9 @@ jobs:
           export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
           export TERMUX_PACKAGE_VARIANT="${{ matrix.package_variant }}"
 
+          echo "Downloading bootstrap zips for NDK build"
+          ./gradlew downloadBootstraps --no-daemon
+
           echo "Building APKs for '$APK_VERSION_TAG'"
           ./gradlew assembleDebug --no-daemon || exit_on_error "Build failed for '$APK_VERSION_TAG'"
 

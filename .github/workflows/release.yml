@@ -56,6 +56,17 @@ jobs:
             exit 1
           fi
 
+      - name: Download bootstrap zips
+        # NDK build (termux-bootstrap-zip.S uses .incbin) needs bootstrap-*.zip
+        # before compilation, but downloadBootstraps is only a dependency of
+        # javaCompile which runs AFTER buildNdkBuild. Pre-download to fix ordering.
+        env:
+          TERMUX_PACKAGE_VARIANT: ${{ matrix.package_variant }}
+        run: |
+          ./gradlew downloadBootstraps --no-daemon
+          echo "Bootstrap zips ready:"
+          ls -la app/src/main/cpp/bootstrap-*.zip
+
       - name: Build signed Release APKs
         shell: bash {0}
         env:
