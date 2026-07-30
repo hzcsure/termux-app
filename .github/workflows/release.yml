@@ -1,0 +1,173 @@
+# ============================================================================
+# CD: 发布 Release (签名 APK + GitHub Release)
+# 触发条件: push tag v*.*.* (如 v0.119.0, v0.119.0-beta.1)
+# 前置条件: 在 fork 仓库 Settings > Secrets 添加签名密钥
+# ============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'        # v0.119.0
+      - 'v*.*.*-*'      # v0.119.0-beta.1
+
+# Release 不取消并发, 保证完整性
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write    # 创建 GitHub Release 需要写权限
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: 构建 Release APK (签名)
+  # ---------------------------------------------------------------------------
+  build-release:
+    name: Build Signed Release (${{ matrix.package_variant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        package_variant: [ apt-android-7, apt-android-5 ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing keystore
+        # 把 base64 编码的 keystore 文件还原成 .jks
+        # Secret 名称: KEYSTORE_BASE64 (base64 编码的 jks 文件)
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release-keystore.jks
+          if [ ! -s app/release-keystore.jks ]; then
+            echo "::error::Failed to decode keystore. Check KEYSTORE_BASE64 secret."
+            exit 1
+          fi
+
+      - name: Build signed Release APKs
+        shell: bash {0}
+        env:
+          TERMUX_PACKAGE_VARIANT: ${{ matrix.package_variant }}
+          KEYSTORE_FILE: release-keystore.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          exit_on_error() { echo "::error::$1"; exit 1; }
+
+          RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          # 验证 semver
+          if ! printf "%s" "${RELEASE_TAG/v/}" | grep -qP '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$'; then
+            exit_on_error "Tag '$RELEASE_TAG' is not valid semver 2.0.0. Use format: v0.119.0 or v0.119.0-beta.1"
+          fi
+
+          APK_DIR_PATH="./app/build/outputs/apk/release"
+          APK_VERSION_TAG="$RELEASE_TAG+${{ matrix.package_variant }}-github-release"
+          APK_BASENAME_PREFIX="termux-app_$APK_VERSION_TAG"
+
+          export TERMUX_APP_VERSION_NAME="${RELEASE_TAG/v/}"
+          export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
+          export TERMUX_PACKAGE_VARIANT="${{ matrix.package_variant }}"
+          export TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS=1
+
+          echo "Building signed release APKs for '$APK_VERSION_TAG'"
+
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file="$(pwd)/app/$KEYSTORE_FILE" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD" \
+            --no-daemon \
+            || exit_on_error "Release build failed"
+
+          echo "APK_DIR_PATH=$APK_DIR_PATH" >> $GITHUB_ENV
+          echo "APK_BASENAME_PREFIX=$APK_BASENAME_PREFIX" >> $GITHUB_ENV
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+
+      - name: Validate APKs
+        run: |
+          for abi in universal arm64-v8a armeabi-v7a x86_64 x86; do
+            if ! test -f "${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_$abi.apk"; then
+              echo "::error::Missing release APK: ${{ env.APK_BASENAME_PREFIX }}_$abi.apk"
+              exit 1
+            fi
+          done
+
+      - name: Generate sha256sums
+        run: |
+          cd "${{ env.APK_DIR_PATH }}"
+          sha256sum \
+            "${{ env.APK_BASENAME_PREFIX }}_universal.apk" \
+            "${{ env.APK_BASENAME_PREFIX }}_arm64-v8a.apk" \
+            "${{ env.APK_BASENAME_PREFIX }}_armeabi-v7a.apk" \
+            "${{ env.APK_BASENAME_PREFIX }}_x86_64.apk" \
+            "${{ env.APK_BASENAME_PREFIX }}_x86.apk" \
+            > "${{ env.APK_BASENAME_PREFIX }}_sha256sums"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apks-${{ matrix.package_variant }}
+          path: |
+            ${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_*.apk
+            ${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_sha256sums
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # Job 2: 创建 GitHub Release 并上传 APK
+  # 依赖所有 variant 构建完成
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-apks-*
+          merge-multiple: true
+          path: ./release-assets
+
+      - name: List release assets
+        run: |
+          echo "=== Release Assets ==="
+          find ./release-assets -type f | sort
+          echo "======================"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: ./release-assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload sha256sums
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ./release-assets/*sha256sums
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
