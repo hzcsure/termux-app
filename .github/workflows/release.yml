@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package_variant: [ apt-android-7, apt-android-5 ]
+        package_variant: [ apt-android-7 ]
 
     steps:
       - name: Checkout
@@ -109,7 +109,7 @@ jobs:
 
       - name: Validate APKs
         run: |
-          for abi in universal arm64-v8a armeabi-v7a x86_64 x86; do
+          for abi in arm64-v8a armeabi-v7a; do
             if ! test -f "${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_$abi.apk"; then
               echo "::error::Missing release APK: ${{ env.APK_BASENAME_PREFIX }}_$abi.apk"
               exit 1
@@ -120,11 +120,8 @@ jobs:
         run: |
           cd "${{ env.APK_DIR_PATH }}"
           sha256sum \
-            "${{ env.APK_BASENAME_PREFIX }}_universal.apk" \
             "${{ env.APK_BASENAME_PREFIX }}_arm64-v8a.apk" \
             "${{ env.APK_BASENAME_PREFIX }}_armeabi-v7a.apk" \
-            "${{ env.APK_BASENAME_PREFIX }}_x86_64.apk" \
-            "${{ env.APK_BASENAME_PREFIX }}_x86.apk" \
             > "${{ env.APK_BASENAME_PREFIX }}_sha256sums"
 
       - name: Upload build artifacts
