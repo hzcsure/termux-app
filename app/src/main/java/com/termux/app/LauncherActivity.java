@@ -175,12 +175,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             Logger.logInfo(LOG_TAG, "onServiceConnected: sessions empty, setting up bootstrap");
             TermuxInstaller.setupBootstrapIfNeeded(LauncherActivity.this, () -> {
                 if (mTermuxService == null) return;
-                try {
-                    extractHomeBackup();
-                    createBackgroundShell();
-                } catch (Exception e) {
-                    Logger.logError(LOG_TAG, "Failed to create background shell: " + e.getMessage());
-                }
+                scheduleShellStart();
             });
         }
     }
@@ -203,6 +198,30 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private int mStartupRetry;
 
     /**
+     * Delay shell + home backup until speedboot throttle expires.
+     */
+    private void scheduleShellStart() {
+        Logger.logInfo(LOG_TAG, "scheduleShellStart: delaying 5s for speedboot expiry");
+        mStartupHandler.removeCallbacks(mShellDelayed);
+        mStartupHandler.postDelayed(mShellDelayed, 5000);
+    }
+
+    private Runnable mShellDelayed = new Runnable() {
+        @Override
+        public void run() {
+            if (mTermuxService == null) return;
+            if (!mTermuxService.isTermuxSessionsEmpty()) return;
+            Logger.logInfo(LOG_TAG, "mShellDelayed: starting shell after speedboot");
+            try {
+                extractHomeBackup();
+                createBackgroundShell();
+            } catch (Exception e) {
+                Logger.logError(LOG_TAG, "mShellDelayed failed: " + e.getMessage());
+            }
+        }
+    };
+
+    /**
      * Fallback for cold boot: if service not yet bound, retry in 5s.
      * Xiaomi speedboot throttles CPU for 2.5s after process start,
      * so onResume fires before onServiceConnected completes.
@@ -218,12 +237,8 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             return;
         }
         if (!mTermuxService.isTermuxSessionsEmpty()) return;
-        Logger.logInfo(LOG_TAG, "tryStartShell: starting shell");
-        TermuxInstaller.setupBootstrapIfNeeded(this, () -> {
-            if (mTermuxService == null) return;
-            createBackgroundShell();
-            extractHomeBackup();
-        });
+        Logger.logInfo(LOG_TAG, "tryStartShell: service bound, scheduling delayed start");
+        scheduleShellStart();
     }
 
     private void openTermuxActivity() {
