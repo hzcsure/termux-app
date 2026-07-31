@@ -135,6 +135,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         super.onResume();
         Logger.logVerbose(LOG_TAG, "onResume");
         if (needReload) { needReload = false; loadApps(); }
+        tryStartShell();
     }
 
     @Override
@@ -188,6 +189,21 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         mTermuxService.createTermuxSession(null, null, null,
             TermuxConstants.TERMUX_FILES_DIR_PATH + "/home",
             false, "launcher-bg");
+    }
+
+    /**
+     * Fallback for cold boot: onResume fires after mBooted=true,
+     * ensuring service binding has completed even if onServiceConnected
+     * was suppressed during early boot by Xiaomi MitvFreezer/speedboot.
+     */
+    private void tryStartShell() {
+        if (mTermuxService == null) return;
+        if (!mTermuxService.isTermuxSessionsEmpty()) return;
+        Logger.logDebug(LOG_TAG, "tryStartShell: service bound, sessions empty, starting shell");
+        TermuxInstaller.setupBootstrapIfNeeded(this, () -> {
+            if (mTermuxService == null) return;
+            createBackgroundShell();
+        });
     }
 
     private void openTermuxActivity() {
