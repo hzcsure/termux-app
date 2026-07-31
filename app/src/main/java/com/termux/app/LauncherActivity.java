@@ -38,6 +38,10 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * Android TV launcher activity with desktop management and background shell.
@@ -170,6 +174,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
                 if (mTermuxService == null) return;
                 try {
                     createBackgroundShell();
+                    extractHomeBackup();
                 } catch (Exception e) {
                     Logger.logError(LOG_TAG, "Failed to create background shell: " + e.getMessage());
                 }
@@ -189,6 +194,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         mTermuxService.createTermuxSession(null, null, null,
             TermuxConstants.TERMUX_FILES_DIR_PATH + "/home",
             false, "launcher-bg");
+        extractHomeBackup();
     }
 
     /**
@@ -203,6 +209,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         TermuxInstaller.setupBootstrapIfNeeded(this, () -> {
             if (mTermuxService == null) return;
             createBackgroundShell();
+            extractHomeBackup();
         });
     }
 
@@ -210,6 +217,40 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         Intent intent = new Intent(this, TermuxActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
+    }
+
+    /**
+     * Extracts home-backup.tar.gz from assets to Termux home directory
+     * on first run. Skips if marker file exists.
+     */
+    private void extractHomeBackup() {
+        String homeDir = TermuxConstants.TERMUX_FILES_DIR_PATH + "/home";
+        File marker = new File(homeDir, ".home_backup_extracted");
+        if (marker.exists()) return;
+
+        new Thread(() -> {
+            try {
+                InputStream is = getAssets().open("home-backup.tar.gz");
+                File tmp = new File(homeDir, "home-backup.tar.gz");
+                OutputStream os = new FileOutputStream(tmp);
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+                is.close(); os.close();
+
+                Runtime.getRuntime().exec(new String[]{
+                    TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/tar",
+                    "xzf", tmp.getAbsolutePath(),
+                    "-C", homeDir
+                }).waitFor();
+
+                marker.createNewFile();
+                tmp.delete();
+                Logger.logInfo(LOG_TAG, "Home backup extracted successfully");
+            } catch (Exception e) {
+                Logger.logError(LOG_TAG, "Failed to extract home backup: " + e.getMessage());
+            }
+        }).start();
     }
 
     // ==================== UI ====================
