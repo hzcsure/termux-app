@@ -176,8 +176,8 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             TermuxInstaller.setupBootstrapIfNeeded(LauncherActivity.this, () -> {
                 if (mTermuxService == null) return;
                 try {
-                    createBackgroundShell();
                     extractHomeBackup();
+                    createBackgroundShell();
                 } catch (Exception e) {
                     Logger.logError(LOG_TAG, "Failed to create background shell: " + e.getMessage());
                 }
@@ -197,7 +197,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         mTermuxService.createTermuxSession(null, null, null,
             TermuxConstants.TERMUX_FILES_DIR_PATH + "/home",
             false, "launcher-bg");
-        extractHomeBackup();
     }
 
     private Handler mStartupHandler = new Handler();
