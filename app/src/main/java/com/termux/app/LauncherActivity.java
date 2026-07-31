@@ -146,6 +146,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     protected void onDestroy() {
         super.onDestroy();
         Logger.logDebug(LOG_TAG, "onDestroy");
+        mStartupHandler.removeCallbacksAndMessages(null);
         if (mServiceBound) {
             unbindService(this);
             mServiceBound = false;
@@ -197,13 +198,22 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         extractHomeBackup();
     }
 
+    private Handler mStartupHandler = new Handler();
+    private int mStartupRetry;
+
     /**
-     * Fallback for cold boot: onResume fires after mBooted=true,
-     * ensuring service binding has completed even if onServiceConnected
-     * was suppressed during early boot by Xiaomi MitvFreezer/speedboot.
+     * Fallback for cold boot: if service not yet bound, retry in 5s.
+     * Xiaomi speedboot throttles CPU for 2.5s after process start,
+     * so onResume fires before onServiceConnected completes.
      */
     private void tryStartShell() {
-        if (mTermuxService == null) return;
+        if (mTermuxService == null) {
+            if (mStartupRetry++ < 5) {
+                Logger.logDebug(LOG_TAG, "tryStartShell: service not bound, retry in 5s (" + mStartupRetry + "/5)");
+                mStartupHandler.postDelayed(this::tryStartShell, 5000);
+            }
+            return;
+        }
         if (!mTermuxService.isTermuxSessionsEmpty()) return;
         Logger.logDebug(LOG_TAG, "tryStartShell: service bound, sessions empty, starting shell");
         TermuxInstaller.setupBootstrapIfNeeded(this, () -> {
