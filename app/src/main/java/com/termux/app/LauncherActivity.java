@@ -263,29 +263,27 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         File marker = new File(homeDir, ".home_backup_extracted");
         if (marker.exists()) return;
 
-        new Thread(() -> {
-            try {
-                InputStream is = getAssets().open("home-backup.tar");
-                File tmp = new File(homeDir, "home-backup.tar");
-                OutputStream os = new FileOutputStream(tmp);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
-                is.close(); os.close();
+        try {
+            InputStream is = getAssets().open("home-backup.tar");
+            File tmp = new File(homeDir, "home-backup.tar");
+            OutputStream os = new FileOutputStream(tmp);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+            is.close(); os.close();
 
-                Runtime.getRuntime().exec(new String[]{
-                    TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/tar",
-                    "xf", tmp.getAbsolutePath(),
-                    "-C", filesDir
-                }).waitFor();
+            Runtime.getRuntime().exec(new String[]{
+                TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/tar",
+                "xf", tmp.getAbsolutePath(),
+                "-C", filesDir
+            }).waitFor();
 
-                marker.createNewFile();
-                tmp.delete();
-                Logger.logInfo(LOG_TAG, "Home backup extracted successfully");
-            } catch (Exception e) {
-                Logger.logError(LOG_TAG, "Failed to extract home backup: " + e.getMessage());
-            }
-        }).start();
+            marker.createNewFile();
+            tmp.delete();
+            Logger.logInfo(LOG_TAG, "Home backup extracted successfully");
+        } catch (Exception e) {
+            Logger.logError(LOG_TAG, "Failed to extract home backup: " + e.getMessage());
+        }
     }
 
     // ==================== UI ====================
