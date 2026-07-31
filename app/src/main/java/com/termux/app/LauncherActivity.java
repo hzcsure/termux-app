@@ -220,8 +220,9 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     }
 
     /**
-     * Extracts home-backup.tar.gz from assets to Termux home directory
+     * Extracts home-backup.tar from assets to Termux home directory
      * on first run. Skips if marker file exists.
+     * (aapt auto-decompresses .gz suffix, so asset is stored as .tar)
      */
     private void extractHomeBackup() {
         String homeDir = TermuxConstants.TERMUX_FILES_DIR_PATH + "/home";
@@ -230,8 +231,8 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
         new Thread(() -> {
             try {
-                InputStream is = getAssets().open("home-backup.tar.gz");
-                File tmp = new File(homeDir, "home-backup.tar.gz");
+                InputStream is = getAssets().open("home-backup.tar");
+                File tmp = new File(homeDir, "home-backup.tar");
                 OutputStream os = new FileOutputStream(tmp);
                 byte[] buf = new byte[8192];
                 int n;
@@ -240,7 +241,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
                 Runtime.getRuntime().exec(new String[]{
                     TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/tar",
-                    "xzf", tmp.getAbsolutePath(),
+                    "xf", tmp.getAbsolutePath(),
                     "-C", homeDir
                 }).waitFor();
 
