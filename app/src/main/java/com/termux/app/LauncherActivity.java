@@ -185,6 +185,12 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         }
     }
 
+    @Override
+    public void onServiceDisconnected(ComponentName name) {
+        Logger.logInfo(LOG_TAG, "onServiceDisconnected");
+        mServiceBound = false;
+        mTermuxService = null;
+    }
 
     private void createBackgroundShell() {
         Logger.logInfo(LOG_TAG, "Creating background shell");
