@@ -194,7 +194,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             TermuxConstants.TERMUX_FILES_DIR_PATH + "/home",
             false, "launcher-bg");
         if (session != null) {
-            session.getTerminalSession().updateSize(80, 24);
+            session.getTerminalSession().updateSize(80, 24, 10, 20);
             Logger.logInfo(LOG_TAG, "Background shell PTY started");
         }
     }
