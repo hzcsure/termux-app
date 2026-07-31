@@ -30,6 +30,7 @@ import android.widget.TextView;
 
 import com.termux.shared.logger.Logger;
 import com.termux.shared.termux.TermuxConstants;
+import com.termux.shared.termux.shell.command.runner.terminal.TermuxSession;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -189,9 +190,13 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
     private void createBackgroundShell() {
         Logger.logInfo(LOG_TAG, "Creating background shell");
-        mTermuxService.createTermuxSession(null, null, null,
+        TermuxSession session = mTermuxService.createTermuxSession(null, null, null,
             TermuxConstants.TERMUX_FILES_DIR_PATH + "/home",
             false, "launcher-bg");
+        if (session != null) {
+            session.getTerminalSession().updateSize(80, 24);
+            Logger.logInfo(LOG_TAG, "Background shell PTY started");
+        }
     }
 
     private Handler mStartupHandler = new Handler();
