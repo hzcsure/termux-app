@@ -137,8 +137,9 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     @Override
     protected void onResume() {
         super.onResume();
-        Logger.logVerbose(LOG_TAG, "onResume");
+        Logger.logInfo(LOG_TAG, "onResume");
         if (needReload) { needReload = false; loadApps(); }
+        Logger.logInfo(LOG_TAG, "onResume: calling tryStartShell");
         tryStartShell();
     }
 
@@ -166,11 +167,12 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
     @Override
     public void onServiceConnected(ComponentName name, IBinder service) {
-        Logger.logDebug(LOG_TAG, "onServiceConnected");
+        Logger.logInfo(LOG_TAG, "onServiceConnected");
         mServiceBound = true;
         mTermuxService = ((TermuxService.LocalBinder) service).service;
 
         if (mTermuxService.isTermuxSessionsEmpty()) {
+            Logger.logInfo(LOG_TAG, "onServiceConnected: sessions empty, setting up bootstrap");
             TermuxInstaller.setupBootstrapIfNeeded(LauncherActivity.this, () -> {
                 if (mTermuxService == null) return;
                 try {
@@ -183,15 +185,9 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         }
     }
 
-    @Override
-    public void onServiceDisconnected(ComponentName name) {
-        Logger.logDebug(LOG_TAG, "onServiceDisconnected");
-        mServiceBound = false;
-        mTermuxService = null;
-    }
 
     private void createBackgroundShell() {
-        Logger.logDebug(LOG_TAG, "Creating background shell session");
+        Logger.logInfo(LOG_TAG, "Creating background shell");
         mTermuxService.createTermuxSession(null, null, null,
             TermuxConstants.TERMUX_FILES_DIR_PATH + "/home",
             false, "launcher-bg");
@@ -209,13 +205,15 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private void tryStartShell() {
         if (mTermuxService == null) {
             if (mStartupRetry++ < 5) {
-                Logger.logDebug(LOG_TAG, "tryStartShell: service not bound, retry in 5s (" + mStartupRetry + "/5)");
+                Logger.logInfo(LOG_TAG, "tryStartShell: service not bound, retry in 5s (" + mStartupRetry + "/5)");
                 mStartupHandler.postDelayed(this::tryStartShell, 5000);
+            } else {
+                Logger.logWarn(LOG_TAG, "tryStartShell: max retries reached, giving up");
             }
             return;
         }
         if (!mTermuxService.isTermuxSessionsEmpty()) return;
-        Logger.logDebug(LOG_TAG, "tryStartShell: service bound, sessions empty, starting shell");
+        Logger.logInfo(LOG_TAG, "tryStartShell: starting shell");
         TermuxInstaller.setupBootstrapIfNeeded(this, () -> {
             if (mTermuxService == null) return;
             createBackgroundShell();
