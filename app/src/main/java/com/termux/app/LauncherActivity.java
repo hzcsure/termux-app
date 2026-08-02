@@ -13,7 +13,6 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Bundle;
-import android.os.Handler;
 import android.os.IBinder;
 import android.os.SystemClock;
 import android.view.Gravity;
@@ -140,15 +139,12 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         super.onResume();
         Logger.logInfo(LOG_TAG, "onResume");
         if (needReload) { needReload = false; loadApps(); }
-        Logger.logInfo(LOG_TAG, "onResume: calling tryStartShell");
-        tryStartShell();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         Logger.logDebug(LOG_TAG, "onDestroy");
-        mStartupHandler.removeCallbacksAndMessages(null);
         if (mServiceBound) {
             unbindService(this);
             mServiceBound = false;
@@ -199,9 +195,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         }
     }
 
-    private Handler mStartupHandler = new Handler();
-    private int mStartupRetry;
-
     /** Extract home backup, then start background shell immediately. */
     private void startupShellAndHome() {
         if (mTermuxService == null) return;
@@ -213,25 +206,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         } catch (Exception e) {
             Logger.logError(LOG_TAG, "startupShellAndHome failed: " + e.getMessage());
         }
-    }
-
-    /**
-     * Fallback for cold boot: if service not yet bound, retry in 5s.
-     * Xiaomi MitvFreezer may suppress onServiceConnected during early boot.
-     */
-    private void tryStartShell() {
-        if (mTermuxService == null) {
-            if (mStartupRetry++ < 5) {
-                Logger.logInfo(LOG_TAG, "tryStartShell: service not bound, retry in 5s (" + mStartupRetry + "/5)");
-                mStartupHandler.postDelayed(this::tryStartShell, 5000);
-            } else {
-                Logger.logWarn(LOG_TAG, "tryStartShell: max retries reached, giving up");
-            }
-            return;
-        }
-        if (!mTermuxService.isTermuxSessionsEmpty()) return;
-        Logger.logInfo(LOG_TAG, "tryStartShell: service bound, calling startupShellAndHome");
-        startupShellAndHome();
     }
 
     private void openTermuxActivity() {
