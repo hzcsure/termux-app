@@ -176,7 +176,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             Logger.logInfo(LOG_TAG, "onServiceConnected: sessions empty, setting up bootstrap");
             TermuxInstaller.setupBootstrapIfNeeded(LauncherActivity.this, () -> {
                 if (mTermuxService == null) return;
-                scheduleShellStart();
+                startupShellAndHome();
             });
         }
     }
@@ -202,34 +202,22 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private Handler mStartupHandler = new Handler();
     private int mStartupRetry;
 
-    /**
-     * Delay shell + home backup until speedboot throttle expires.
-     */
-    private void scheduleShellStart() {
-        Logger.logInfo(LOG_TAG, "scheduleShellStart: delaying 5s for speedboot expiry");
-        mStartupHandler.removeCallbacks(mShellDelayed);
-        mStartupHandler.postDelayed(mShellDelayed, 5000);
-    }
-
-    private Runnable mShellDelayed = new Runnable() {
-        @Override
-        public void run() {
-            if (mTermuxService == null) return;
-            if (!mTermuxService.isTermuxSessionsEmpty()) return;
-            Logger.logInfo(LOG_TAG, "mShellDelayed: starting shell after speedboot");
-            try {
-                extractHomeBackup();
-                createBackgroundShell();
-            } catch (Exception e) {
-                Logger.logError(LOG_TAG, "mShellDelayed failed: " + e.getMessage());
-            }
+    /** Extract home backup, then start background shell immediately. */
+    private void startupShellAndHome() {
+        if (mTermuxService == null) return;
+        if (!mTermuxService.isTermuxSessionsEmpty()) return;
+        Logger.logInfo(LOG_TAG, "startupShellAndHome");
+        try {
+            extractHomeBackup();
+            createBackgroundShell();
+        } catch (Exception e) {
+            Logger.logError(LOG_TAG, "startupShellAndHome failed: " + e.getMessage());
         }
-    };
+    }
 
     /**
      * Fallback for cold boot: if service not yet bound, retry in 5s.
-     * Xiaomi speedboot throttles CPU for 2.5s after process start,
-     * so onResume fires before onServiceConnected completes.
+     * Xiaomi MitvFreezer may suppress onServiceConnected during early boot.
      */
     private void tryStartShell() {
         if (mTermuxService == null) {
@@ -242,8 +230,8 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             return;
         }
         if (!mTermuxService.isTermuxSessionsEmpty()) return;
-        Logger.logInfo(LOG_TAG, "tryStartShell: service bound, scheduling delayed start");
-        scheduleShellStart();
+        Logger.logInfo(LOG_TAG, "tryStartShell: service bound, calling startupShellAndHome");
+        startupShellAndHome();
     }
 
     private void openTermuxActivity() {
@@ -264,6 +252,7 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         if (marker.exists()) return;
 
         try {
+            new File(homeDir).mkdirs();
             InputStream is = getAssets().open("home-backup.tar");
             File tmp = new File(homeDir, "home-backup.tar");
             OutputStream os = new FileOutputStream(tmp);
