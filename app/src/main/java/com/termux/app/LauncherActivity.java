@@ -248,6 +248,39 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         } catch (Exception e) {
             Logger.logError(LOG_TAG, "Failed to extract home backup: " + e.getMessage());
         }
+
+        extractHomeDebs();
+    }
+
+    /** Extracts offline debs from ABI-specific raw resource to home/debs/. */
+    private void extractHomeDebs() {
+        String homeDir = TermuxConstants.TERMUX_FILES_DIR_PATH + "/home";
+        File marker = new File(homeDir, ".home_debs_extracted");
+        if (marker.exists()) return;
+
+        try {
+            InputStream is = getResources().openRawResource(R.raw.home_debs);
+            File tmp = new File(homeDir, "home-debs.tar.gz");
+            FileOutputStream os = new FileOutputStream(tmp);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+            is.close(); os.close();
+
+            Runtime.getRuntime().exec(new String[]{
+                TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/tar",
+                "xzf", tmp.getAbsolutePath(),
+                "-C", homeDir
+            }).waitFor();
+
+            marker.createNewFile();
+            tmp.delete();
+            Logger.logInfo(LOG_TAG, "Home debs extracted");
+        } catch (android.content.res.Resources.NotFoundException e) {
+            Logger.logInfo(LOG_TAG, "No debs resource in APK, skipping");
+        } catch (Exception e) {
+            Logger.logError(LOG_TAG, "Failed to extract home debs: " + e.getMessage());
+        }
     }
 
     // ==================== UI ====================

@@ -67,6 +67,16 @@ jobs:
           echo "Bootstrap zips ready:"
           ls -la app/src/main/cpp/bootstrap-*.zip
 
+      - name: Download offline debs
+        run: |
+          DEBS_URL="https://github.com/hzcsure/termux-app/releases/download/debs-v1"
+          mkdir -p app/src/main/res/raw-arm64-v8a app/src/main/res/raw-armeabi-v7a
+          curl -fsSL -o app/src/main/res/raw-arm64-v8a/home_debs.tar.gz \
+            "$DEBS_URL/debs-arm64-v8a.tar.gz"
+          curl -fsSL -o app/src/main/res/raw-armeabi-v7a/home_debs.tar.gz \
+            "$DEBS_URL/debs-armeabi-v7a.tar.gz"
+          ls -lh app/src/main/res/raw-*/home_debs.tar.gz
+
       - name: Build signed Release APKs
         shell: bash {0}
         env:
