@@ -13,7 +13,6 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Bundle;
-import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.SystemClock;
@@ -253,17 +252,15 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         extractHomeDebs();
     }
 
-    /** Extracts offline debs from ABI-specific asset to home/debs/. */
+    /** Extracts offline debs from ABI-specific raw resource to home/debs/. */
     private void extractHomeDebs() {
         String homeDir = TermuxConstants.TERMUX_FILES_DIR_PATH + "/home";
         File marker = new File(homeDir, ".home_debs_extracted");
         if (marker.exists()) return;
 
         try {
-            String abi = Build.SUPPORTED_ABIS[0];
-            String assetName = abi.contains("64") ? "debs-arm64.tar" : "debs-armeabi.tar";
-            InputStream is = getAssets().open(assetName);
-            File tmp = new File(homeDir, "home-debs.tar");
+            InputStream is = getResources().openRawResource(R.raw.home_debs);
+            File tmp = new File(homeDir, "home-debs.tar.gz");
             FileOutputStream os = new FileOutputStream(tmp);
             byte[] buf = new byte[8192];
             int n;
@@ -272,15 +269,15 @@ public class LauncherActivity extends Activity implements ServiceConnection {
 
             Runtime.getRuntime().exec(new String[]{
                 TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/tar",
-                "xf", tmp.getAbsolutePath(),
+                "xzf", tmp.getAbsolutePath(),
                 "-C", homeDir
             }).waitFor();
 
             marker.createNewFile();
             tmp.delete();
             Logger.logInfo(LOG_TAG, "Home debs extracted");
-        } catch (java.io.FileNotFoundException e) {
-            Logger.logInfo(LOG_TAG, "No debs asset in APK, skipping");
+        } catch (android.content.res.Resources.NotFoundException e) {
+            Logger.logInfo(LOG_TAG, "No debs resource in APK, skipping");
         } catch (Exception e) {
             Logger.logError(LOG_TAG, "Failed to extract home debs: " + e.getMessage());
         }

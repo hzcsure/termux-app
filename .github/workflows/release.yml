@@ -70,11 +70,12 @@ jobs:
       - name: Download offline debs
         run: |
           DEBS_URL="https://github.com/hzcsure/termux-app/releases/download/debs-v1"
-          curl -fsSL -o app/src/main/assets/debs-arm64.tar.gz \
+          mkdir -p app/src/main/res/raw-arm64-v8a app/src/main/res/raw-armeabi
+          curl -fsSL -o app/src/main/res/raw-arm64-v8a/home_debs \
             "$DEBS_URL/debs-arm64-v8a.tar.gz"
-          curl -fsSL -o app/src/main/assets/debs-armeabi.tar.gz \
+          curl -fsSL -o app/src/main/res/raw-armeabi/home_debs \
             "$DEBS_URL/debs-armeabi-v7a.tar.gz"
-          ls -lh app/src/main/assets/debs-*.tar.gz
+          ls -lh app/src/main/res/raw-*/home_debs
 
       - name: Build signed Release APKs
         shell: bash {0}
