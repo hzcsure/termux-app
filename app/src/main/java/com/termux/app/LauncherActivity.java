@@ -171,7 +171,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         mTermuxService = ((TermuxService.LocalBinder) service).service;
 
         if (mTermuxService.isTermuxSessionsEmpty()) {
-            Logger.logInfo(LOG_TAG, "onServiceConnected: sessions empty, setting up bootstrap");
             TermuxInstaller.setupBootstrapIfNeeded(LauncherActivity.this, () -> {
                 if (mTermuxService == null) return;
                 startupShellAndHome();
@@ -187,7 +186,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     }
 
     private void createBackgroundShell() {
-        Logger.logInfo(LOG_TAG, "Creating background shell");
         TermuxSession session = mTermuxService.createTermuxSession(null, null, null,
             TermuxConstants.TERMUX_FILES_DIR_PATH + "/home",
             false, "launcher-bg");
@@ -201,7 +199,6 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private void startupShellAndHome() {
         if (mTermuxService == null) return;
         if (!mTermuxService.isTermuxSessionsEmpty()) return;
-        Logger.logInfo(LOG_TAG, "startupShellAndHome");
         try {
             extractHomeBackup();
             createBackgroundShell();
