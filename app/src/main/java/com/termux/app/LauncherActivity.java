@@ -256,10 +256,12 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     /** Extracts offline debs from ABI-specific asset to home/debs/. */
     private void extractHomeDebs() {
         String homeDir = TermuxConstants.TERMUX_FILES_DIR_PATH + "/home";
+        String debsDir = homeDir + "/debs";
         File marker = new File(homeDir, ".home_debs_extracted");
         if (marker.exists()) return;
 
         try {
+            new File(debsDir).mkdirs();
             String abi = Build.SUPPORTED_ABIS[0];
             String assetName = abi.contains("64") ? "debs-arm64.tar" : "debs-armeabi.tar";
             InputStream is = getAssets().open(assetName);
@@ -273,12 +275,12 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             Runtime.getRuntime().exec(new String[]{
                 TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/tar",
                 "xf", tmp.getAbsolutePath(),
-                "-C", homeDir
+                "-C", debsDir
             }).waitFor();
 
             marker.createNewFile();
             tmp.delete();
-            Logger.logInfo(LOG_TAG, "Home debs extracted");
+            Logger.logInfo(LOG_TAG, "Home debs extracted to " + debsDir);
         } catch (java.io.FileNotFoundException e) {
             Logger.logInfo(LOG_TAG, "No debs asset in APK, skipping");
         } catch (Exception e) {
