@@ -14,17 +14,27 @@ import android.view.WindowManager;
  * 当电视息屏、小米电源服务强杀“前台 app 的整个 cgroup”时，
  * 被杀的是本 app 的独立 cgroup，TVHome（及 sshd/crond/sing-box）得以幸存。
  *
- * ⚠️ 焦点开关（决定能否真的当替死鬼，需在 TV 上实测）：
- *   - false（默认，优先保证 TVHome 可用）：NOT_FOCUSABLE + NOT_TOUCH_MODAL
- *     → TVHome 始终前台、按键/触摸全穿透。但部分 MIUI 版本按“栈顶 resumed Activity”
- *       判定前台，此时诱饵不是前台 → 息屏可能仍杀 TVHome。
- *   - true（优先保证被 kill）：去掉 NOT_FOCUSABLE → 诱饵成为真正前台 Activity，
- *     息屏必被杀；代价是诱饵期间遥控器按键会先到本 Activity（圆点极小，影响可忽略，
- *     但 TVHome 暂时收不到导航键，亮屏重启后恢复）。
+ * 焦点开关（2026-09-16 已在 MiTV_ASTP0 / Android 9 上实测，两个值都跑过）：
+ *
+ *   - true（当前值，必须）：去掉 NOT_FOCUSABLE → 诱饵持有真实焦点窗口，
+ *     息屏必被杀，且不会被 ANR 拖死。
+ *
+ *   - false（已实测否决，勿再改回）：NOT_FOCUSABLE 虽然也能让诱饵成为
+ *     mResumedActivity / mFocusedApp（挡死逻辑本身成立），但窗口 flags 导致
+ *     mCurrentFocus=null —— 系统里“没有任何窗口持有焦点”。后果有两个：
+ *       1) 任意遥控器按键都会触发 InputDispatcher 等待 5s 超时 → ANR →
+ *          “Killing …: user request after error”，诱饵自己先死，
+ *          之后 TVHome 重回前台，下一次息屏照杀 TVHome，保护失效；
+ *       2) 诱饵在位期间 TVHome 完全收不到按键。
+ *     false 下挡死只在“全程无任何按键”时才侥幸生效，不可用于实际部署。
+ *
+ * 注意：true 的代价是诱饵期间遥控器按键先到本 Activity（圆点仅 28x28，
+ * 不遮挡 TVHome 画面）。若要同时保住 TVHome 导航，需再加 dispatchKeyEvent
+ * 分流（POWER/SLEEP 留前台，其余键 finish() 还焦点）+ 空闲自动重拉。
  */
 public class DecoyActivity extends Activity {
 
-    private static final boolean FOCUSABLE = false;
+    private static final boolean FOCUSABLE = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
