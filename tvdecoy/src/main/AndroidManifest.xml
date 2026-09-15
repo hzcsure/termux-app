@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 仅 BOOT_COMPLETED 需要此权限；SCREEN_ON / USER_PRESENT 不需要 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.DecoyTransparent">
+
+        <!--
+            透明栈顶 Activity（前台诱饵）：
+            - singleInstance + 独立 taskAffinity → 独立任务栈，叠在 TVHome 之上
+            - 不画悬浮窗 → 不需要 SYSTEM_ALERT_WINDOW / pm grant
+            - 窗口标志在 DecoyActivity 里设置：默认 NOT_FOCUSABLE，
+              保证 TVHome 始终前台可交互；若上机实测息屏仍杀 TVHome，
+              把 DecoyActivity.FOCUSABLE 改为 true 即可。
+        -->
+        <activity
+            android:name=".DecoyActivity"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity="com.hzc.tvdecoy.decoy"
+            android:excludeFromRecents="true"
+            android:stateNotNeeded="true"
+            android:theme="@style/Theme.DecoyTransparent">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 开机 / 解锁 / 亮屏 时自启，把诱饵重新顶到前台 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="android.intent.action.SCREEN_ON" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

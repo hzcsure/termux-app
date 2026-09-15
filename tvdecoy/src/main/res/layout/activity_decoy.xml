@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <!-- 仅一个小红点，纯视觉占位，无任何交互 -->
+    <View
+        android:layout_width="14dp"
+        android:layout_height="14dp"
+        android:background="#FF3B30" />
+
+</FrameLayout>

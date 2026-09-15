@@ -1,0 +1,33 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.hzc.tvdecoy'
+    // 复用 termux CI runner 已装好的 SDK（与仓库 app 模块一致，避免缺平台）
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.hzc.tvdecoy'
+        minSdk 21
+        targetSdk 33
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    // 用 debug 密钥给 release 变体签名，保证 `./gradlew assembleRelease`（termux 发布时
+    // 会顺带配置本模块）不会因“无签名配置”而失败。个人 TV 助手类 app 足够。
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+}
+
+dependencies {
+    // 纯 framework，无第三方依赖
+}
