@@ -5,47 +5,64 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.WindowManager;
 
 /**
  * 透明“前台诱饵”Activity。
  *
- * 目的：永远视觉上压在 TVHome 之上，但完全不抢 TVHome 的输入；
- * 当电视息屏、小米电源服务强杀“前台 app 的整个 cgroup”时，
- * 被杀的是本 app 的独立 cgroup，TVHome（及 sshd/crond/sing-box）得以幸存。
+ * 目的：永远占据「栈顶 resumed Activity」这个位置，替 TVHome 承受小米电视
+ * 息屏时的 forceStopPackage，同时让用户感觉遥控器照常操作 TVHome。
  *
- * 焦点开关（2026-09-16 在 MiTV_ASTP0 / Android 9 上实测过两个值）：
+ * 背景（已逆向 + 实测）：小米 PowerManagerService 息屏时会
+ *   gotoSleepStayAliveProcess current:&lt;pkg&gt; not in whitelist
+ *   → gotoHomeLauncher → forceStopPackage package:&lt;pkg&gt;
+ * 白名单硬编码在 framework（services.vdex），无 root 不可改；被杀的判据是
+ * 【栈顶 resumed Activity 所属包】，与可见窗口 / overlay / adj 均无关
+ * （TYPE_APPLICATION_OVERLAY 悬浮窗已实测无法挡 kill）。
  *
- *   - true：去掉 NOT_FOCUSABLE → 诱饵持有真实焦点窗口，息屏必被杀，不会被 ANR 拖死。
- *     代价：诱饵期间遥控器按键先到本 Activity，TVHome 收不到导航键（可按 HOME 退出）。
+ * 焦点策略（2026-09-16 在 MiTV_ASTP0 / Android 9 上实测）：
  *
- *   - false（2026-09-16 起为默认值）：NOT_FOCUSABLE → 诱饵不抢焦点。
- *     ⚠️ 仅在【同 task】前提下才成立，否则必 ANR：
- *        · 同 task（当前设计，由 TVHome startActivity 不带 NEW_TASK 拉起）
- *          → TVHome 仅 pause，窗口与 surface 保留，焦点穿透给 TVHome，
- *            挡死 + 遥控兼得。
- *        · 独立 task（旧设计，singleInstance / 独立 taskAffinity / am start）
- *          → TVHome 被 stop（mDrawState=NO_SURFACE）拿不到焦点，
- *            mCurrentFocus=null → 任意按键触发 5s InputDispatcher 超时 → ANR →
- *            “Killing …: user request after error”，诱饵自杀，保护失效。
+ *   必须 FOCUSABLE=true（去掉 NOT_FOCUSABLE），否则必 ANR 自杀：
+ *     NOT_FOCUSABLE 时诱饵自身没有可聚焦窗口，但系统仍视其为 mFocusedApp，
+ *     DisplayContent 停在 FocusedWindow=&lt;null&gt;，**不会**回退到其它 App 的
+ *     窗口 —— 即使 TVHome 窗口当时可见（mViewVisibility=0x0 mObscured=false）
+ *     也一样。随后任意按键触发 InputDispatcher 5s 超时 →
+ *     “ANR in com.hzc.tvdecoy” → 诱饵自己先死，TVHome 重回前台，
+ *     下一次息屏照杀 TVHome，保护失效。
  *
- * 运行时仍可覆盖，省一次 CI 周期：
- *   adb shell am start -n com.hzc.tvdecoy/.DecoyActivity --ez focusable true
- * 若同 task 实测焦点仍为 null（WMS 不把焦点给 paused 但可见的下方窗口），
- * 就用上面的命令临时切 true 回退到“抢焦点但能用”的形态。
+ *   “把诱饵塞进 TVHome 同一个 task 让焦点穿透”这条备选路径也已实测否决：
+ *     从 TVHome startActivity（不带 NEW_TASK）后，诱饵仍然每次另起 task
+ *     （termux t73 vs decoy t74/t75/t77），home stack 不接受外来 Activity；
+ *     且如上所述，即便窗口可见焦点也不会穿透。
+ *
+ * 结论：焦点不可能让出去。改为【应用层按键转发】—— 诱饵保持可聚焦拿到焦点，
+ * 收到遥控器按键后把语义丢一条广播给 TVHome，由 TVHome 自己执行导航。
+ * 用户感知就是“遥控器仍然能用”。
  */
 public class DecoyActivity extends Activity {
 
-    private static final boolean FOCUSABLE = false;
+    private static final String TAG = "DecoyActivity";
+
+    /** 运行时可覆盖，用于现场 A/B：--ez focusable false */
+    private static final boolean FOCUSABLE = true;
+
+    /** 按键转发目标包（TVHome）。两条 APK 必须各自独立安装，包名不同。 */
+    private static final String TARGET_PKG = "com.termux";
+    /** 与 TVHome 侧 LauncherActivity 的 DECOY_RELAY_ACTION 保持一致。 */
+    private static final String RELAY_ACTION = "com.hzc.tvdecoy.KEY";
+    /** 与 TVHome 的 LONG_PRESS(500ms) 保持一致，用于区分“长按开底部栏”。 */
+    private static final long LONG_PRESS_MS = 500L;
+
+    private long mCenterDownTime;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_decoy);
 
-        // 运行时可切换焦点，省一次 CI 周期：
-        //   adb shell am start -n com.hzc.tvdecoy/.DecoyActivity --ez focusable false
         boolean focusable = FOCUSABLE;
         Intent it = getIntent();
         if (it != null && it.hasExtra("focusable")) {
@@ -68,5 +85,59 @@ public class DecoyActivity extends Activity {
         }
         getWindow().setAttributes(lp);
         getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int kc = event.getKeyCode();
+        int action = event.getAction();
+
+        switch (kc) {
+            // 方向键：DOWN 立即转发，保证光标移动跟手（遥控器连发也只认 DOWN）
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (action == KeyEvent.ACTION_DOWN) relay(kc, false);
+                return true;
+
+            // 确认键：DOWN 记时，UP 时按按住时长决定“短按=启动 / 长按=底部栏”
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                if (action == KeyEvent.ACTION_DOWN) {
+                    // 只在首次 DOWN 记时；否则遥控器长按的重复事件会把计时清零，
+                    // 长按永远判定不出来
+                    if (event.getRepeatCount() == 0) mCenterDownTime = event.getDownTime();
+                    return true;
+                }
+                if (action == KeyEvent.ACTION_UP) {
+                    relay(kc, event.getEventTime() - mCenterDownTime >= LONG_PRESS_MS);
+                    return true;
+                }
+                return true;
+
+            case KeyEvent.KEYCODE_BACK:
+            case KeyEvent.KEYCODE_MENU:
+                if (action == KeyEvent.ACTION_UP) relay(kc, false);
+                return true;
+
+            default:
+                // 音量等系统键交回系统，不要吞掉
+                return super.dispatchKeyEvent(event);
+        }
+    }
+
+    /** 把一次按键语义发给 TVHome，由它操作自己的桌面网格。 */
+    private void relay(int keyCode, boolean isLong) {
+        try {
+            Intent i = new Intent(RELAY_ACTION);
+            i.setPackage(TARGET_PKG);
+            i.putExtra("key", keyCode);
+            i.putExtra("long", isLong);
+            sendBroadcast(i);
+        } catch (Exception e) {
+            Log.w(TAG, "relay failed: " + e.getMessage());
+        }
     }
 }

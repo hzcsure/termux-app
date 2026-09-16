@@ -1,9 +1,11 @@
 package com.termux.app;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -90,6 +92,18 @@ public class LauncherActivity extends Activity implements ServiceConnection {
      */
     private static final String DECOY_DISABLE_FILE = ".tvdecoy_disable";
 
+    /**
+     * tvdecoy 的按键转发通道。
+     *
+     * 为什么需要它：实测确认焦点不可能让给 TVHome —— 诱饵一旦 NOT_FOCUSABLE，
+     * DisplayContent 就停在 FocusedWindow=null 且不回退到其它 App 的窗口，
+     * 按键 5s 超时把诱饵 ANR 掉；而“塞进同一个 task 让焦点穿透”也不成立
+     * （home stack 不接受外来 Activity，诱饵每次仍另起 task）。
+     * 所以诱饵保持可聚焦拿住焦点，把遥控器按键丢过来，由 TVHome 自己执行导航，
+     * 用户感知就是遥控器照常可用。
+     */
+    private static final String DECOY_RELAY_ACTION = "com.hzc.tvdecoy.KEY";
+
     // Special marker in order string for Terminal tile
     private static final String TERMINAL_MARKER = "##TERMINAL##";
 
@@ -141,6 +155,18 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         public void run() { startDecoy(); }
     };
 
+    /** 接收 tvdecoy 转发来的遥控器按键并执行对应导航动作。 */
+    private final BroadcastReceiver decoyKeyRelay = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null) return;
+            if (!DECOY_RELAY_ACTION.equals(intent.getAction())) return;
+            handleRelayedKey(intent.getIntExtra("key", -1),
+                             intent.getBooleanExtra("long", false));
+        }
+    };
+    private boolean relayRegistered;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -166,6 +192,14 @@ public class LauncherActivity extends Activity implements ServiceConnection {
                 public void run() { launchPkg(pkg); }
             }, delay);
         }
+
+        // 诱饵持焦点时，遥控器按键由它转发过来
+        try {
+            registerReceiver(decoyKeyRelay, new IntentFilter(DECOY_RELAY_ACTION));
+            relayRegistered = true;
+        } catch (Exception e) {
+            Logger.logWarn(LOG_TAG, "register decoy relay failed: " + e.getMessage());
+        }
     }
 
     @Override
@@ -186,6 +220,10 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     @Override
     protected void onDestroy() {
         decoyHandler.removeCallbacks(decoyRunnable);
+        if (relayRegistered) {
+            try { unregisterReceiver(decoyKeyRelay); } catch (Exception ignored) { }
+            relayRegistered = false;
+        }
         super.onDestroy();
         Logger.logDebug(LOG_TAG, "onDestroy");
         if (mServiceBound) {
@@ -233,12 +271,93 @@ public class LauncherActivity extends Activity implements ServiceConnection {
                 Logger.logDebug(LOG_TAG, "decoy not installed, skip");
                 return;
             }
-            i.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            // NEW_TASK：按 affinity 复用已存在的 decoy task，避免每次 onResume
+            // 都新建一个空 task（诱饵是独立 task，复用它自己的就行）。
+            // 焦点穿透已被实测否决，所以不必迁就“进 TVHome 同 task”。
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                     | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                     | Intent.FLAG_ACTIVITY_NO_ANIMATION);
             startActivity(i);
-            Logger.logInfo(LOG_TAG, "decoy launched into own task");
+            Logger.logInfo(LOG_TAG, "decoy launched");
         } catch (Exception e) {
             Logger.logWarn(LOG_TAG, "startDecoy failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * 执行 tvdecoy 转发来的遥控器按键。
+     * 诱饵占着焦点，所以这里不能依赖系统把按键分发到本 Activity，
+     * 必须自己按语义移动 mainGrid / 操作底部栏。
+     */
+    private void handleRelayedKey(int keyCode, boolean isLong) {
+        if (keyCode < 0 || mainGrid == null || shownApps == null || shownApps.isEmpty()) return;
+        int pos = mainGrid.getSelectedItemPosition();
+        if (pos < 0) pos = 0;
+        boolean barOpen = bottomBar != null && bottomBar.getVisibility() == View.VISIBLE;
+
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                if (editMode) moveApp(-1);
+                else if (barOpen) moveBarFocus(-1);
+                else if (pos > 0) mainGrid.setSelection(pos - 1);
+                return;
+
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (editMode) moveApp(1);
+                else if (barOpen) moveBarFocus(1);
+                else if (pos < shownApps.size() - 1) mainGrid.setSelection(pos + 1);
+                return;
+
+            case KeyEvent.KEYCODE_DPAD_UP:
+                if (barOpen) { closeBar(); return; }
+                if (!editMode && pos - COLS >= 0) mainGrid.setSelection(pos - COLS);
+                return;
+
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                if (!editMode && pos + COLS < shownApps.size()) mainGrid.setSelection(pos + COLS);
+                return;
+
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                if (editMode) { exitEditMode(); return; }
+                if (barOpen) {
+                    View f = bottomBar.findFocus();
+                    if (f != null) f.performClick();
+                    return;
+                }
+                if (isLong) { toggleBottomBar(); return; }
+                if (pos < shownApps.size()) {
+                    AppInfo sel = shownApps.get(pos);
+                    if (sel.isTerminal) openTermuxActivity();
+                    else launchPkg(sel.pkg);
+                }
+                return;
+
+            case KeyEvent.KEYCODE_BACK:
+                if (editMode) { exitEditMode(); return; }
+                if (barOpen) closeBar();
+                return;
+
+            case KeyEvent.KEYCODE_MENU:
+                if (!editMode) toggleBottomBar();
+                return;
+
+            default:
+        }
+    }
+
+    /** 底部栏内按钮焦点循环（前两个 child 是图标和标题）。 */
+    private void moveBarFocus(int delta) {
+        if (bottomBar == null) return;
+        int count = bottomBar.getChildCount() - 2;
+        if (count <= 0) return;
+        int cur = 0;
+        for (int i = 0; i < count; i++) {
+            if (bottomBar.getChildAt(i + 2).isFocused()) { cur = i; break; }
+        }
+        int next = (cur + delta + count) % count;
+        bottomBar.getChildAt(next + 2).requestFocus();
     }
 
     // ==================== TermuxService ====================
