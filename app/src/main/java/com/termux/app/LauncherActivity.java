@@ -42,8 +42,10 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.InputStream;
 import java.io.OutputStream;
 
@@ -82,8 +84,15 @@ public class LauncherActivity extends Activity implements ServiceConnection {
      */
     private static final String DECOY_PKG = "com.hzc.tvdecoy";
     private static final String DECOY_CLS = "com.hzc.tvdecoy.DecoyActivity";
-    /** 拉起延迟。太短会在用户刚按 HOME 想用桌面时立刻又被诱饵盖住。 */
-    private static final long DECOY_DELAY_MS = 3000L;
+    /**
+     * 拉起延迟默认值（毫秒）。
+     * 原为 3000ms，理由是"太短会在用户刚按 HOME 想用桌面时立刻又被诱饵盖住"——
+     * 但那是【按键转发实现之前】的约束：那时诱饵盖上来遥控就失灵。
+     * 转发（含长按开底部栏、栏内导航）实测通过后，被盖住已不影响操作，故缩短。
+     */
+    private static final long DECOY_DELAY_DEFAULT_MS = 200L;
+    /** 上限，防止配置文件里写了离谱的值把诱饵拖成摆设。 */
+    private static final long DECOY_DELAY_MAX_MS = 60_000L;
     /**
      * 总开关：Termux HOME 下存在该文件即停用诱饵，删除即启用。
      * 从 SSH 直接控制：touch ~/.tvdecoy_disable   /   rm ~/.tvdecoy_disable
@@ -91,6 +100,15 @@ public class LauncherActivity extends Activity implements ServiceConnection {
      * 改不了 app 的私有 SharedPreferences。
      */
     private static final String DECOY_DISABLE_FILE = ".tvdecoy_disable";
+
+    /**
+     * 可选的延迟配置文件：Termux HOME 下，单位秒，可写小数（0.2 / 1 / 3）。
+     * 例：echo 1 > ~/.tvdecoy_delay   （想立刻拉起就写 0）
+     * 用文件而不是 SharedPreferences，是因为 SSH 进的是 Termux，
+     * 改不了 app 的私有 SharedPreferences（与 .tvdecoy_disable 同一套做法）。
+     * 文件缺失 / 内容非法 → 用 DECOY_DELAY_DEFAULT_MS。
+     */
+    private static final String DECOY_DELAY_FILE = ".tvdecoy_delay";
 
     /**
      * tvdecoy 的按键转发通道。
@@ -250,7 +268,9 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             Logger.logDebug(LOG_TAG, "decoy disabled by " + DECOY_DISABLE_FILE);
             return;
         }
-        decoyHandler.postDelayed(decoyRunnable, DECOY_DELAY_MS);
+        long delay = decoyDelayMs();
+        Logger.logDebug(LOG_TAG, "schedule decoy in " + delay + "ms");
+        decoyHandler.postDelayed(decoyRunnable, delay);
     }
 
     private boolean decoyDisabled() {
@@ -258,10 +278,43 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     }
 
     /**
-     * 把诱饵拉进【本 task】栈顶。
-     * 刻意不加 FLAG_ACTIVITY_NEW_TASK：加了就会另起 task，TVHome 随即被 stop，
-     * 窗口 surface 销毁 → 拿不到焦点 → mCurrentFocus=null → 按键 5s 超时 ANR。
-     * 同 task 时 TVHome 只是 pause，窗口保留，焦点穿透回 TVHome。
+     * 每次排期都重读一次配置文件，这样在电视上改完立刻生效，不用重启 app。
+     * 读一次几 KB 的文件开销可忽略（只在 onResume 触发）。
+     */
+    private long decoyDelayMs() {
+        File f = new File(TermuxConstants.TERMUX_FILES_DIR_PATH + "/home", DECOY_DELAY_FILE);
+        if (!f.exists()) return DECOY_DELAY_DEFAULT_MS;
+        BufferedReader r = null;
+        try {
+            r = new BufferedReader(new FileReader(f));
+            String line = r.readLine();
+            if (line == null) return DECOY_DELAY_DEFAULT_MS;
+            float sec = Float.parseFloat(line.trim());
+            if (Float.isNaN(sec) || sec < 0) return DECOY_DELAY_DEFAULT_MS;
+            long ms = (long) (sec * 1000f);
+            return Math.min(ms, DECOY_DELAY_MAX_MS);
+        } catch (Exception e) {
+            Logger.logWarn(LOG_TAG, "bad " + DECOY_DELAY_FILE + ", fallback to default: " + e.getMessage());
+            return DECOY_DELAY_DEFAULT_MS;
+        } finally {
+            if (r != null) {
+                try { r.close(); } catch (Exception ignored) { }
+            }
+        }
+    }
+
+    /**
+     * 把诱饵拉到栈顶（替 TVHome 承受息屏时的 forceStopPackage）。
+     *
+     * FLAG_ACTIVITY_NEW_TASK 是刻意的：实测过不带 NEW_TASK 的写法，诱饵**依然**每次另起
+     * task（termux t113 对 decoy t120/t125）——本 Activity 在 home stack，
+     * home stack 不接受外来 Activity，所以「让诱饵进 TVHome 同一个 task」走不通。
+     * 既然必然另起 task，就用 NEW_TASK | SINGLE_TOP 按 affinity 复用诱饵自己的 task，
+     * 避免每次 onResume 都新堆一个 task。下方 TVHome 窗口仍正常绘制
+     * （mViewVisibility=0x0 mObscured=false），用户观感不受影响。
+     *
+     * 焦点穿透已实测否决（详见 tvdecoy Manifest 注释），所以这里不需要迁就"进同一个
+     * task"；按键由 DecoyActivity 转发过来，走 handleRelayedKey()。
      */
     private void startDecoy() {
         try {

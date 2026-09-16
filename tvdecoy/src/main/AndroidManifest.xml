@@ -15,19 +15,27 @@
         android:theme="@style/Theme.DecoyTransparent">
 
         <!--
-            透明栈顶 Activity（前台诱饵）：
-            - 2026-09-16 实测：小米 PMS 的 "current" 按【栈顶 resumed Activity】判定，
-              与可见窗口 / overlay 无关（TYPE_APPLICATION_OVERLAY 悬浮窗已实测否决）。
-              所以必须由 Activity 占位，悬浮窗挡不住 kill。
-            - 必须保持独立包名 com.hzc.tvdecoy：PMS 的落点是
-              forceStopPackage package:<pkg>，按包名杀。若与 TVHome 同包名则两者
-              同 UID 同 cgroup 一起死，保护在数学上无效。
-            - 2026-09-16 改：去掉 singleInstance + 独立 taskAffinity。
-              这两项会让本 Activity 另起 task，导致下方 TVHome 被 stop
-              （mDrawState=NO_SURFACE）而无法获得焦点 → mCurrentFocus=null → ANR。
-              去掉后由 TVHome 用 startActivity（不带 NEW_TASK）拉起，
-              本 Activity 落入 TVHome 自己的 task，TVHome 仅 pause 且窗口保留，
-              焦点得以穿透到 TVHome。
+            透明栈顶 Activity（前台诱饵）。由 TVHome 的 LauncherActivity 在 onResume
+            后延迟一小段拉起（默认 200ms，可用 Termux HOME 下的 ~/.tvdecoy_delay
+            覆盖，单位秒）：FLAG_ACTIVITY_NEW_TASK | SINGLE_TOP，按 affinity 复用
+            诱饵自己的 task，避免每次重挂都堆一个新 task。
+
+            2026-09-16 在 MiTV_ASTP0 / Android 9 上的实测定论：
+            - 小米 PMS 的 "current" 按【栈顶 resumed Activity】判定，与可见窗口 /
+              overlay 无关（TYPE_APPLICATION_OVERLAY 悬浮窗实测挡不住 kill）
+              ⇒ 必须由 Activity 占位。
+            - 必须独立包名 com.hzc.tvdecoy：PMS 落点是 forceStopPackage package:<pkg>，
+              按包名杀；同包名 ⇒ 同 UID 同 cgroup 一起死，保护在数学上无效。
+            - 窗口必须可聚焦（不能加 FLAG_NOT_FOCUSABLE）：不可聚焦时系统仍把本 app
+              当作 mFocusedApp，但 FocusedWindow 停在 null 且不会回退到其它 app 的
+              窗口，任意按键触发 InputDispatcher 5s 超时 → ANR → 诱饵自杀。
+            - 「焦点穿透回 TVHome」已被实测否决：即便 TVHome 窗口可见
+              （mViewVisibility=0x0 mObscured=false），焦点搜索也不跨 app 回退；
+              塞进同一 task 同样无效（home stack 不接受外来 Activity）。
+              ⇒ 最终方案是应用层按键转发：本 Activity 持焦点，把按键语义广播给
+              TVHome（见 DecoyActivity.dispatchKeyEvent）。
+            - 已实测：不再声明 singleInstance / 独立 taskAffinity —— 本 Activity
+              始终另起 task，但下方 TVHome 窗口仍正常绘制，不影响用户观感。
         -->
         <activity
             android:name=".DecoyActivity"
