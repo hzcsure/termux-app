@@ -3,10 +3,34 @@
     android:layout_width="wrap_content"
     android:layout_height="wrap_content">
 
-    <!-- 仅一个小红点，纯视觉占位，无任何交互 -->
-    <View
-        android:layout_width="14dp"
-        android:layout_height="14dp"
-        android:background="#FF3B30" />
+    <!--
+        左上角日期时间标签：09-16 周三 18:01
+
+        用系统 TextClock 而不是自己 setText：
+        - 它内部只注册 ACTION_TIME_TICK（系统本来每分钟就为状态栏时钟发一次），
+          窗口 detach 时自动注销 —— 不新增任何唤醒源，常驻开销 ≈ 0。
+        - 自己写 Handler.postDelayed 轮询是最差解（自持 Runnable、文本没变也跑）。
+        - 只在 onCreate 设一次也不行：本 Activity 是长驻的（一直活到息屏被杀），
+          电视一整天不息屏时显示会停在启动那一刻。
+
+        格式固定 24 小时制（format12Hour 也写成 24h）：
+        MM / dd / HH / mm 全部补零 ⇒ 字符串长度恒定 ⇒ 每分钟刷新不会引起
+        窗口宽度跳变，也就不会触发重排。
+    -->
+    <TextClock
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/decoy_date_bg"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:fontFamily="sans-serif-medium"
+        android:format24Hour="MM-dd E HH:mm"
+        android:format12Hour="MM-dd E HH:mm"
+        android:includeFontPadding="false"
+        android:singleLine="true"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp" />
 
 </FrameLayout>

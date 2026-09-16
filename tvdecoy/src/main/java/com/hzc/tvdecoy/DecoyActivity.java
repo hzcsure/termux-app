@@ -70,14 +70,17 @@ public class DecoyActivity extends Activity {
         }
 
         WindowManager.LayoutParams lp = getWindow().getAttributes();
-        // 仅一个 14dp 小红点，固定在左上角，不占屏
+        // 左上角日期时间标签（见 res/layout/activity_decoy.xml），约 150x35dp，
+        // 落在 TVHome 顶部 114dp 空白区内，不压图标
         lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.gravity = Gravity.TOP | Gravity.START;
         lp.x = 24;
         lp.y = 24;
-        // 圆点以外区域的触摸穿透给 TVHome
-        lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+        // 整个窗口不接收触摸：标签变大后若只 NOT_TOUCH_MODAL，被它盖住的那一块
+        // 会吃掉触摸事件。电视用遥控操作，本窗口只需要【按键焦点】，
+        // NOT_TOUCHABLE 不影响焦点与按键分发（那由 FLAG_NOT_FOCUSABLE 管）。
+        lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         if (focusable) {
             lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
         } else {

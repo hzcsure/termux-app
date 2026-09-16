@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    日期/时间标签的底：70% 不透明黑 + 6dp 圆角胶囊。
+    电视桌面本身是纯黑，但下方 TVHome 可能是浅色壁纸或播放中的画面，
+    加这层底是为了任何背景下白字都有稳定对比度。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#B3000000" />
+    <corners android:radius="6dp" />
+</shape>
