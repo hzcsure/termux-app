@@ -4,6 +4,11 @@
     <!-- 仅 BOOT_COMPLETED 需要此权限；SCREEN_ON / USER_PRESENT 不需要 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- 方案 B：悬浮窗诱饵（DecoyService）所需。
+         需先 adb shell appops set com.hzc.tvdecoy SYSTEM_ALERT_WINDOW allow -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
     <application
         android:allowBackup="false"
         android:label="@string/app_name"
@@ -30,6 +35,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 方案 B：悬浮窗诱饵。不启动任何 Activity，只对屏幕挂一个
+             NOT_FOCUSABLE + NOT_TOUCHABLE 的 1x1 透明 overlay，
+             理论上完全不影响 TVHome 的输入。用于验证「current 前台应用」
+             到底按 Activity 栈顶还是按可见窗口判定。 -->
+        <service
+            android:name=".DecoyService"
+            android:exported="true" />
 
         <!-- 开机 / 解锁 / 亮屏 时自启，把诱饵重新顶到前台 -->
         <receiver

@@ -1,6 +1,7 @@
 package com.hzc.tvdecoy;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.os.Bundle;
@@ -41,6 +42,14 @@ public class DecoyActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_decoy);
 
+        // 运行时可切换焦点，省一次 CI 周期：
+        //   adb shell am start -n com.hzc.tvdecoy/.DecoyActivity --ez focusable false
+        boolean focusable = FOCUSABLE;
+        Intent it = getIntent();
+        if (it != null && it.hasExtra("focusable")) {
+            focusable = it.getBooleanExtra("focusable", FOCUSABLE);
+        }
+
         WindowManager.LayoutParams lp = getWindow().getAttributes();
         // 仅一个 14dp 小红点，固定在左上角，不占屏
         lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
@@ -50,7 +59,7 @@ public class DecoyActivity extends Activity {
         lp.y = 24;
         // 圆点以外区域的触摸穿透给 TVHome
         lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
-        if (FOCUSABLE) {
+        if (focusable) {
             lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
         } else {
             lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
