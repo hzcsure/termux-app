@@ -16,17 +16,22 @@
 
         <!--
             透明栈顶 Activity（前台诱饵）：
-            - singleInstance + 独立 taskAffinity → 独立任务栈，叠在 TVHome 之上
-            - 不画悬浮窗 → 不需要 SYSTEM_ALERT_WINDOW / pm grant
-            - 窗口标志在 DecoyActivity 里设置：默认 NOT_FOCUSABLE，
-              保证 TVHome 始终前台可交互；若上机实测息屏仍杀 TVHome，
-              把 DecoyActivity.FOCUSABLE 改为 true 即可。
+            - 2026-09-16 实测：小米 PMS 的 "current" 按【栈顶 resumed Activity】判定，
+              与可见窗口 / overlay 无关（TYPE_APPLICATION_OVERLAY 悬浮窗已实测否决）。
+              所以必须由 Activity 占位，悬浮窗挡不住 kill。
+            - 必须保持独立包名 com.hzc.tvdecoy：PMS 的落点是
+              forceStopPackage package:<pkg>，按包名杀。若与 TVHome 同包名则两者
+              同 UID 同 cgroup 一起死，保护在数学上无效。
+            - 2026-09-16 改：去掉 singleInstance + 独立 taskAffinity。
+              这两项会让本 Activity 另起 task，导致下方 TVHome 被 stop
+              （mDrawState=NO_SURFACE）而无法获得焦点 → mCurrentFocus=null → ANR。
+              去掉后由 TVHome 用 startActivity（不带 NEW_TASK）拉起，
+              本 Activity 落入 TVHome 自己的 task，TVHome 仅 pause 且窗口保留，
+              焦点得以穿透到 TVHome。
         -->
         <activity
             android:name=".DecoyActivity"
             android:exported="true"
-            android:launchMode="singleInstance"
-            android:taskAffinity="com.hzc.tvdecoy.decoy"
             android:excludeFromRecents="true"
             android:stateNotNeeded="true"
             android:theme="@style/Theme.DecoyTransparent">

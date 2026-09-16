@@ -63,6 +63,33 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private static final String KEY_AUTOBOOT = "autoboot_pkg";
     private static final String KEY_BOOT_DELAY = "boot_delay";
 
+    /**
+     * tvdecoy（独立安装的诱饵包，包名必须不同于 com.termux）。
+     *
+     * 背景：小米电视息屏时 PowerManagerService 会执行
+     *   gotoSleepStayAliveProcess current:<pkg> not in whitelist
+     *   → gotoHomeLauncher → forceStopPackage package:<pkg>
+     * 杀掉的是「息屏那一刻的栈顶 resumed Activity 所属包」。TVHome 是桌面，
+     * 永远是栈顶，所以每次必死，且 forceStop 按包名清掉整个 cgroup，
+     * sshd/crond/sing-box 一并连坐。
+     *
+     * 对策：把 tvdecoy 拉到本 task 栈顶替死。它独立包名 → 独立 UID/cgroup，
+     * 被杀时 TVHome 及其服务完好。窗口全透明且 NOT_FOCUSABLE，焦点穿透回 TVHome。
+     *
+     * 白名单硬编码在 framework（已逆向 services.vdex 确认），无 root 改不了。
+     */
+    private static final String DECOY_PKG = "com.hzc.tvdecoy";
+    private static final String DECOY_CLS = "com.hzc.tvdecoy.DecoyActivity";
+    /** 拉起延迟。太短会在用户刚按 HOME 想用桌面时立刻又被诱饵盖住。 */
+    private static final long DECOY_DELAY_MS = 3000L;
+    /**
+     * 总开关：Termux HOME 下存在该文件即停用诱饵，删除即启用。
+     * 从 SSH 直接控制：touch ~/.tvdecoy_disable   /   rm ~/.tvdecoy_disable
+     * 选文件而非 SharedPreferences，是因为 SSH 进的是 Termux，
+     * 改不了 app 的私有 SharedPreferences。
+     */
+    private static final String DECOY_DISABLE_FILE = ".tvdecoy_disable";
+
     // Special marker in order string for Terminal tile
     private static final String TERMINAL_MARKER = "##TERMINAL##";
 
@@ -109,6 +136,11 @@ public class LauncherActivity extends Activity implements ServiceConnection {
     private int editPos;
     private long dpadDownTime;
 
+    private final Handler decoyHandler = new Handler();
+    private final Runnable decoyRunnable = new Runnable() {
+        public void run() { startDecoy(); }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -141,10 +173,19 @@ public class LauncherActivity extends Activity implements ServiceConnection {
         super.onResume();
         Logger.logInfo(LOG_TAG, "onResume");
         if (needReload) { needReload = false; loadApps(); }
+        scheduleDecoy();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // 退到后台时取消待执行的拉起，避免诱饵在别的 app 之上冒出来
+        decoyHandler.removeCallbacks(decoyRunnable);
     }
 
     @Override
     protected void onDestroy() {
+        decoyHandler.removeCallbacks(decoyRunnable);
         super.onDestroy();
         Logger.logDebug(LOG_TAG, "onDestroy");
         if (mServiceBound) {
@@ -159,6 +200,44 @@ public class LauncherActivity extends Activity implements ServiceConnection {
             if (i != null) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); }
         } catch (Exception e) {
             Logger.logWarn(LOG_TAG, "Failed to launch " + pkg + ": " + e.getMessage());
+        }
+    }
+
+    // ==================== tvdecoy ====================
+
+    /** 安排一次诱饵拉起。每次 onResume 都会调用，因此息屏后亮屏可自动重挂。 */
+    private void scheduleDecoy() {
+        decoyHandler.removeCallbacks(decoyRunnable);
+        if (decoyDisabled()) {
+            Logger.logDebug(LOG_TAG, "decoy disabled by " + DECOY_DISABLE_FILE);
+            return;
+        }
+        decoyHandler.postDelayed(decoyRunnable, DECOY_DELAY_MS);
+    }
+
+    private boolean decoyDisabled() {
+        return new File(TermuxConstants.TERMUX_FILES_DIR_PATH + "/home", DECOY_DISABLE_FILE).exists();
+    }
+
+    /**
+     * 把诱饵拉进【本 task】栈顶。
+     * 刻意不加 FLAG_ACTIVITY_NEW_TASK：加了就会另起 task，TVHome 随即被 stop，
+     * 窗口 surface 销毁 → 拿不到焦点 → mCurrentFocus=null → 按键 5s 超时 ANR。
+     * 同 task 时 TVHome 只是 pause，窗口保留，焦点穿透回 TVHome。
+     */
+    private void startDecoy() {
+        try {
+            Intent i = new Intent();
+            i.setComponent(new ComponentName(DECOY_PKG, DECOY_CLS));
+            if (pm.resolveActivity(i, 0) == null) {
+                Logger.logDebug(LOG_TAG, "decoy not installed, skip");
+                return;
+            }
+            i.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            startActivity(i);
+            Logger.logInfo(LOG_TAG, "decoy launched into own task");
+        } catch (Exception e) {
+            Logger.logWarn(LOG_TAG, "startDecoy failed: " + e.getMessage());
         }
     }
 
