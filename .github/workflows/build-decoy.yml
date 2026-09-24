@@ -9,9 +9,18 @@ name: Build TV Decoy
 
 on:
   push:
+    # 只响应分支推送：定义 branches 即把 tag 事件排除（tag 推送不评估 paths，
+    # 否则每次打 tag 都会白跑一次 —— 发版解耦见 release.yml）
+    branches: [ '**' ]
     paths:
       - 'tvdecoy/**'
       - '.github/workflows/build-decoy.yml'
+      # 共享构建配置：改这些也可能连带打坏 tvdecoy 的构建（尤其 AGP / wrapper 版本）
+      # 注意 paths 是"整段匹配、从仓库根起算"：'build.gradle' 只匹配根文件，不会匹配 app/build.gradle
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/wrapper/**'
   workflow_dispatch:
 
 permissions:
