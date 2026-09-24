@@ -104,7 +104,10 @@ jobs:
 
           echo "Building signed release APKs for '$APK_VERSION_TAG'"
 
-          ./gradlew assembleRelease \
+          # 只构建 :app 及其依赖（termux-shared/terminal-emulator/terminal-view）
+          # 显式限定模块，避免裸 assembleRelease 把独立的 :tvdecoy 模块也拉进
+          # Release 流水线 —— 否则 tvdecoy 一旦编译失败会拖垮整个 TVHome Release 构建
+          ./gradlew :app:assembleRelease \
             -Pandroid.injected.signing.store.file="$(pwd)/app/$KEYSTORE_FILE" \
             -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
             -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
