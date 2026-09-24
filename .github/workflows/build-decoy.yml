@@ -1,6 +1,8 @@
 # ============================================================================
 # Build TV Decoy (透明前台诱饵 app)
-# 触发: 改动 tvdecoy/** 或本 workflow 时自动构建；也支持手动 workflow_dispatch
+# 触发: 分支推送且改动 tvdecoy/**、本 workflow 或共享构建配置时自动构建
+#       （tag 推送不触发：paths 对 tag 不求值，见下方 branches 注释）
+#       也支持手动 workflow_dispatch
 # 产出: debug 签名 APK（可直接 adb install 到 TV）
 # 说明: 复用 termux CI runner 预装的 JDK17 + Android SDK，无需本地编译环境
 # ============================================================================
