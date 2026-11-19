@@ -1,0 +1,267 @@
+# ============================================================================
+# CD: Release (Android 5/6 · apt-android-5 变体)
+# ----------------------------------------------------------------------------
+# 派生自 .github/workflows/release.yml，保持相同 job 拆分与步骤顺序。
+# 仅调整与 android-5 相关的项：
+#   1) 触发条件独立：a5-v* 前缀 tag 或手动触发，不与 release.yml 的 v*.*.* 重叠
+#   2) 变体固定 apt-android-5 → bootstrap 自动落到 2022.04.28-r6 分支
+#   3) 不注入离线 debs（现有 debs 面向 Android 7+ 生态，见文件末尾说明）
+#   4) Artifact / APK / Release 命名加 a5 标识，与 release.yml 产物完全隔离
+# 前置条件: Settings > Secrets 已有
+#   KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
+# ============================================================================
+
+name: Release (Android 5/6)
+
+on:
+  push:
+    tags:
+      # 独立前缀，避免与 release.yml 的 'v*.*.*' 同时命中同一个 tag。
+      # 注意：不要用 'v*.*.*-a5' 之类后缀，'v*.*.*' 的 * 会一并匹配到。
+      - 'a5-v*.*.*'        # a5-v0.119.0
+      - 'a5-v*.*.*-*'      # a5-v0.119.0-beta.1
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（semver，如 0.119.0 或 0.119.0-beta.1）'
+        required: true
+        type: string
+      publish:
+        description: '是否创建 GitHub Release（false 则只上传 Artifact）'
+        required: false
+        default: false
+        type: boolean
+
+# 与 release.yml 分开的并发组，两条流水线互不阻塞
+concurrency:
+  group: release-a5-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write    # 创建 GitHub Release 需要写权限
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: 构建 android-5 签名 Release APK
+  # ---------------------------------------------------------------------------
+  build-release:
+    name: Build Signed Release (apt-android-5)
+    runs-on: ubuntu-latest
+    # 需下载 2022 版 bootstrap 并做 NDK 编译，留足余量
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # 结构保留 matrix，便于后续扩展；本工作流只有 android-5 一项
+        package_variant: [ apt-android-5 ]
+    outputs:
+      a5_tag: ${{ steps.meta.outputs.a5_tag }}
+      app_version: ${{ steps.meta.outputs.app_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Resolve release tag and version
+        id: meta
+        shell: bash {0}
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          exit_on_error() { echo "::error::$1"; exit 1; }
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            APP_VERSION="$INPUT_VERSION"
+            A5_TAG="a5-v${APP_VERSION}"
+          else
+            A5_TAG="${GITHUB_REF#refs/tags/}"
+            APP_VERSION="${A5_TAG#a5-v}"
+          fi
+
+          if ! printf "%s" "$APP_VERSION" | grep -qP '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$'; then
+            exit_on_error "Version '$APP_VERSION' is not valid semver 2.0.0. Use e.g. 0.119.0 or 0.119.0-beta.1"
+          fi
+
+          echo "A5_TAG=$A5_TAG" >> $GITHUB_ENV
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+          echo "a5_tag=$A5_TAG" >> $GITHUB_OUTPUT
+          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+          echo "Resolved tag='$A5_TAG' versionName='$APP_VERSION'"
+
+      - name: Decode signing keystore
+        # 与 release.yml 同一套 secret，保证与 android-7 包签名一致可互相覆盖升级
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release-keystore.jks
+          if [ ! -s app/release-keystore.jks ]; then
+            echo "::error::Failed to decode keystore. Check KEYSTORE_BASE64 secret."
+            exit 1
+          fi
+
+      - name: Verify toolchain vs android-5 requirements
+        # SDK/NDK 不做变体级覆盖：minSdkVersion 在 gradle.properties 中全局为 21，
+        # 两个变体共用同一套 compileSdk/NDK，故此处只做可观测性打印与断言。
+        run: |
+          echo "=== gradle.properties (effective) ==="
+          grep -vE '^\s*#|^\s*$' gradle.properties
+          echo "=== variant bootstrap branch ==="
+          grep -n 'apt-android-5' app/build.gradle || {
+            echo "::error::app/build.gradle 中缺少 apt-android-5 分支，变体不可用"; exit 1; }
+          MIN_SDK=$(grep -E '^minSdkVersion=' gradle.properties | cut -d= -f2)
+          if [ "$MIN_SDK" != "21" ]; then
+            echo "::warning::minSdkVersion=$MIN_SDK (期望 21 / Android 5.0)，请确认改动的意图"
+          fi
+
+      - name: Download android-5 bootstrap zips
+        # NDK 的 termux-bootstrap-zip.S 用 .incbin 引用 bootstrap-*.zip，
+        # 需在 buildNdkBuild 之前就位；downloadBootstraps 内建 sha256 校验。
+        env:
+          TERMUX_PACKAGE_VARIANT: ${{ matrix.package_variant }}
+        run: |
+          ./gradlew downloadBootstraps --no-daemon
+          echo "Bootstrap zips ready:"
+          ls -la app/src/main/cpp/bootstrap-*.zip
+          for f in aarch64 arm i686 x86_64; do
+            test -s "app/src/main/cpp/bootstrap-$f.zip" || {
+              echo "::error::missing bootstrap-$f.zip"; exit 1; }
+          done
+
+      - name: Skip offline debs (android-5)
+        # 现有 debs-*.tar.gz 面向 Android 7+ 的 2026 bootstrap，不适用于 android-5。
+        # LauncherActivity#extractHomeDebs 对缺失资产已做 FileNotFoundException 跳过处理，
+        # 因此不打 debs 仍可正常启动，仅少了预置离线包。
+        run: |
+          rm -f app/src/main/assets/debs-*.tar app/src/main/assets/debs-*.tar.gz
+          echo "assets after cleanup:"
+          ls -la app/src/main/assets/ || true
+
+      - name: Build signed Release APKs
+        shell: bash {0}
+        env:
+          TERMUX_PACKAGE_VARIANT: ${{ matrix.package_variant }}
+          KEYSTORE_FILE: release-keystore.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          exit_on_error() { echo "::error::$1"; exit 1; }
+
+          APK_DIR_PATH="./app/build/outputs/apk/release"
+          APK_VERSION_TAG="$A5_TAG+apt-android-5-github-release"
+          APK_BASENAME_PREFIX="termux-app_$APK_VERSION_TAG"
+
+          export TERMUX_APP_VERSION_NAME="$APP_VERSION"
+          export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
+          export TERMUX_PACKAGE_VARIANT="apt-android-5"
+          export TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS=1
+
+          echo "Building signed release APKs for '$APK_VERSION_TAG'"
+
+          # 显式限定 :app，避免把独立 :tvdecoy 模块拉进 Release 流水线
+          ./gradlew :app:assembleRelease \
+            -Pandroid.injected.signing.store.file="$(pwd)/app/$KEYSTORE_FILE" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD" \
+            --no-daemon \
+            || exit_on_error "Release build failed"
+
+          echo "APK_DIR_PATH=$APK_DIR_PATH" >> $GITHUB_ENV
+          echo "APK_BASENAME_PREFIX=$APK_BASENAME_PREFIX" >> $GITHUB_ENV
+
+      - name: Assert variant baked into build
+        # 防呆：确认 TERMUX_PACKAGE_VARIANT 真的进了 BuildConfig，
+        # 而不是因环境变量丢失静默回落到默认的 apt-android-7。
+        run: |
+          BC=$(find app/build -name BuildConfig.java -path '*buildConfig*' | head -1)
+          echo "BuildConfig: $BC"
+          test -n "$BC" || { echo "::error::BuildConfig.java not found"; exit 1; }
+          grep -q 'TERMUX_PACKAGE_VARIANT = "apt-android-5"' "$BC" || {
+            echo "::error::package variant not applied, got:"; grep TERMUX_PACKAGE_VARIANT "$BC"; exit 1; }
+
+      - name: Validate APKs
+        run: |
+          for abi in arm64-v8a armeabi-v7a; do
+            if ! test -f "${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_$abi.apk"; then
+              echo "::error::Missing release APK: ${{ env.APK_BASENAME_PREFIX }}_$abi.apk"
+              exit 1
+            fi
+          done
+
+      - name: Generate sha256sums
+        run: |
+          cd "${{ env.APK_DIR_PATH }}"
+          sha256sum \
+            "${{ env.APK_BASENAME_PREFIX }}_arm64-v8a.apk" \
+            "${{ env.APK_BASENAME_PREFIX }}_armeabi-v7a.apk" \
+            > "${{ env.APK_BASENAME_PREFIX }}_sha256sums"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          # 前缀 a5-apks- 与 release.yml 的 release-apks-* 不同，
+          # 避免任一侧的 download-artifact 通配误捡对方产物
+          name: a5-apks-${{ matrix.package_variant }}
+          path: |
+            ${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_*.apk
+            ${{ env.APK_DIR_PATH }}/${{ env.APK_BASENAME_PREFIX }}_sha256sums
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # Job 2: 创建独立 GitHub Release（仅 push tag 或手动勾选 publish 时）
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release (Android 5/6)
+    needs: build-release
+    if: github.event_name == 'push' || inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: a5-apks-*
+          merge-multiple: true
+          path: ./release-assets
+
+      - name: List release assets
+        run: |
+          echo "=== Release Assets ==="
+          find ./release-assets -type f | sort
+          echo "======================"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-release.outputs.a5_tag }}
+          name: ${{ needs.build-release.outputs.a5_tag }}
+          body: |
+            Termux for Android 5/6 (apt-android-5 bootstrap, 2022.04.28-r6)
+
+            仅适用于 Android 5.0 ~ 6.0（API 21-23）。Android 7+ 请使用主 Release。
+          generate_release_notes: false
+          draft: false
+          prerelease: ${{ contains(needs.build-release.outputs.app_version, '-') }}
+          files: ./release-assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload sha256sums
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-release.outputs.a5_tag }}
+          files: ./release-assets/*sha256sums
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
